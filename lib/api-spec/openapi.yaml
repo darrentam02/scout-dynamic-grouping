@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: rooms
+    description: Allocation rooms
 paths:
   /healthz:
     get:
@@ -24,7 +26,111 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /rooms:
+    post:
+      operationId: createRoom
+      tags: [rooms]
+      summary: Create an allocation room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoomInput"
+      responses:
+        "201":
+          description: Created room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+  /rooms/{roomCode}:
+    get:
+      operationId: getRoom
+      tags: [rooms]
+      summary: Get a room and its participants
+      parameters:
+        - $ref: "#/components/parameters/RoomCode"
+      responses:
+        "200":
+          description: Room state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+        "404":
+          description: Room not found
+  /rooms/{roomCode}/participants:
+    post:
+      operationId: addParticipant
+      tags: [rooms]
+      summary: Add a participant to a room
+      parameters:
+        - $ref: "#/components/parameters/RoomCode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantInput"
+      responses:
+        "201":
+          description: Added participant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+  /rooms/{roomCode}/grouping:
+    post:
+      operationId: runGrouping
+      tags: [rooms]
+      summary: Run the primary six-group allocation
+      parameters:
+        - $ref: "#/components/parameters/RoomCode"
+      responses:
+        "200":
+          description: Grouped room state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+  /rooms/{roomCode}/grouping/new:
+    post:
+      operationId: allocateNewParticipants
+      tags: [rooms]
+      summary: Allocate only new participants into locked groups
+      parameters:
+        - $ref: "#/components/parameters/RoomCode"
+      responses:
+        "200":
+          description: Updated room state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+  /rooms/{roomCode}/grouping/clear:
+    post:
+      operationId: clearGrouping
+      tags: [rooms]
+      summary: Clear assignments while preserving participants
+      parameters:
+        - $ref: "#/components/parameters/RoomCode"
+      responses:
+        "200":
+          description: Cleared room state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
 components:
+  parameters:
+    RoomCode:
+      name: roomCode
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9]{6}$"
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +139,70 @@ components:
           type: string
       required:
         - status
+    RoomInput:
+      type: object
+      properties:
+        hostName:
+          type: string
+          minLength: 1
+      required: [hostName]
+    Room:
+      type: object
+      properties:
+        roomCode: { type: string }
+        hostName: { type: string }
+        hostPassword: { type: string }
+        status:
+          type: string
+          enum: [PRE_RUN, POST_RUN]
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Participant"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/Group"
+      required: [roomCode, hostName, hostPassword, status, participants, groups]
+    ParticipantInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        gender:
+          type: string
+          enum: [Male, Female]
+        preference:
+          type: string
+          enum: [P1P2, P3P4, P5P6, NONE]
+        expertise:
+          type: array
+          minItems: 20
+          maxItems: 20
+          items: { type: number, enum: [0, 1] }
+      required: [name, gender, preference, expertise]
+    Participant:
+      allOf:
+        - $ref: "#/components/schemas/ParticipantInput"
+        - type: object
+          properties:
+            id: { type: string }
+            status:
+              type: string
+              enum: [UNASSIGNED, ASSIGNED, NEW_UNASSIGNED]
+            assignedGroup:
+              type: [string, "null"]
+              enum: [P1, P2, P3, P4, P5, P6, null]
+          required: [id, status, assignedGroup]
+    Group:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [P1, P2, P3, P4, P5, P6]
+        participantIds:
+          type: array
+          items: { type: string }
+        maleCount: { type: number }
+        femaleCount: { type: number }
+      required: [code, participantIds, maleCount, femaleCount]
 

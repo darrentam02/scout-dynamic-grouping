@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "新領袖 P1–P6 分組配置"
+description = "A real-time room-based allocation tool for Scout leaders that collects participant preferences and expertise, then balances six P1–P6 groups with gender parity and locked incremental allocation."
+version = "1.0.0"
+id = "artifacts/new-leaders-allocation"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19289
+
+[services.development]
+run = "pnpm --filter @workspace/new-leaders-allocation run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/new-leaders-allocation", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/new-leaders-allocation/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19289"
+BASE_PATH = "/"

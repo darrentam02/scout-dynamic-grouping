@@ -1,0 +1,122 @@
+Build a full-stack real-time web application using Next.js, React, Tailwind CSS, and shadcn/ui. Execute all vector math and grouping algorithms client-side in TypeScript.
+
+### App Specs & Constraints
+- Total Groups (K): Fixed at K = 6 (P1, P2, P3, P4, P5, P6).
+- Expected Scale: ~30-50 participants per session.
+- Real-Time Updates: Use WebSockets or SSE for live roster sync across devices.
+- State Persistence: Persist room and participant state in browser localStorage to prevent loss on refresh.
+
+---
+
+### Product Requirement Document (PRD)
+
+#### System Overview
+A real-time, multi-device web application allowing a host to create a room, collect participant demographics and Scout-oriented expertise (專長), and automatically execute a constrained grouping algorithm that balances gender, group sizes, and expertise clustering across 6 priority tiers (P1–P6).
+
+#### 1. Scout Expertise Master Data (20 Options mapped to Tier Preferences)
+Participants select from 20 Scout-Oriented Expertise options. Each option aligns with a default level tier, though participants can manually set their preference:
+
+[P1–P2 Tier: Foundational & Operational]
+1. Pioneering & Pioneering Design (先鋒工程 / 繩結技能)
+2. Camping & Map/Compass Navigation (戶外露營 / 遠足導航)
+3. First Aid & Health Safety (急救 / 衛生保健)
+4. Water Sports & Canoeing/Swimming (水上活動 / 游泳獨木舟)
+5. Handicrafts & Badge Crafts (手藝創作 / 徽章製作)
+6. Camp Cooking & Meal Logistics (野外烹飪 / 膳食籌劃)
+
+[P3–P4 Tier: Media, Program & Technical]
+7. IT, AI & Web Development (資訊科技 / AI 應用 / 網站開發)
+8. Media, Photography & Graphic Design (影音製作 / 攝影 / 宣傳設計)
+9. MC, Games & Stage Performance (活動主持 / 團康司儀 / 遊戲帶領)
+10. Astronomy & Weather Observation (天文 / 氣象觀察)
+11. Environmental & Nature Conservation (環保生態 / 自然觀察)
+12. Drill & Ceremony Discipline (隊伍紀律 / 步操儀仗)
+13. Housewife / Homemaker (全職家庭主婦/主夫)
+
+[P5–P6 Tier: Management, Counseling & Logistics]
+14. Child Psychology & Youth Counseling (兒童心理 / 社工輔導)
+15. Administration & Secretarial (行政管理 / 檔案文書)
+16. Finance, Accounting & Budgeting (財務會計 / 預算控管)
+17. Quartermaster & Equipment Management (物資採購 / 裝備管理)
+18. Logistics & Transport Management (車隊運輸 / 物流統籌)
+19. Student / Youth Leader (學生 / 青年領袖)
+20. Others / NA (其他 / 不適用)
+
+#### 2. System Core Logic & Algorithm
+Constraint Rules:
+- Confidentiality Guard: Confidential fields like age and years of service are EXCLUDED. Allocation relies solely on Gender, Level Preference, and Selected Expertise.
+- Hard Constraint (Size & Priority Balancing): Groups must maintain roughly equal total size. Groups P5 and P6 receive higher capacity/fill priority (Capacity Weight = 1.25 vs P1-P4 = 1.0) during allocation without compromising overall distribution equality.
+- Remainder Handling (Odd Participant Totals): When total participants N % 6 != 0, remainder participants are allocated based on explicit preference:
+  * If remainder participants prefer P1/P2, assign them to P1 or P2 first.
+  * If remainder participants have "No Preference" (or P5/P6 preference), assign them to P5 and P6 first to satisfy high-capacity priority.
+- Gender Parity & Minimum Female Allocation: Every group (P1–P6) must match the overall male-to-female ratio as closely as mathematically possible.
+  * Hard Rule for Female Allocation: In scenarios with low female representation (typically 20%–33%), the algorithm MUST guarantee at least ONE female participant is allocated to every group (P1 through P6) before balancing remaining attributes.
+- Soft Constraint (Level Preference): Participants select preference for:
+  * Small Group (P1, P2)
+  * Middle Group (P3, P4)
+  * Advanced Group (P5, P6)
+  * No Preference
+- Soft Constraint (Attribute Clustering): Maximize similarity/diversity score based on selected Expertise items using cosine similarity across normalized 20-dimensional binary vectors.
+
+Step-by-Step Grouping Algorithm (Client-Side TS Utility):
+Step 1: Data Normalization & Vectorization
+        ├─ Vectorize selected Expertise (1-20) into a 20-dimensional binary vector per participant.
+        └─ Calculate target Male/Female counts per group:
+           Target_M = Total_M / 6
+           Target_F = Total_F / 6
+
+Step 2: Group Sorting & Gender Seeding
+        ├─ Ensure minimum guarantee: Assign 1 Female participant to each group (P1–P6) first.
+        └─ Prioritize Groups P5 & P6 (Capacity Weight = 1.25 vs P1-P4 = 1.0).
+
+Step 3: Stratified Gender & Preference Allocation
+        ├─ Filter remaining participants by Gender (Male / Female).
+        ├─ For each Gender bucket:
+        │   ├─ Group by Preference Tier (P5/P6 -> P3/P4 -> P1/P2 -> No Pref).
+        │   └─ Distribute into target groups matching Target_M and Target_F.
+        └─ Fallback: Assign remaining participants using preference-based remainder rules (P1/P2 vs P5/P6) and minimum distance to group vector centroids.
+
+Step 4: Increment/Delta Allocation (Post-Grouping New Inputs)
+        ├─ Lock existing assignments (Read-Only).
+        ├─ Calculate current group fill vectors and gender balances.
+        └─ Assign new incoming participants strictly to groups with the highest deficit.
+
+#### 3. User Interface & Page Workflow
+Page 1: Authentication & Room Management (/login)
+- Host Actions: Create Room (Generates unique 6-digit Room Code and auto-generated Host Password). Re-entry via Room Code + Host Password.
+- Participant Actions: Input Room Code and Name to enter active room.
+
+Page 2: Grouping Dashboard (/room/[roomCode])
+- Top Bar & Setup Section:
+  * Real-time QR Code Display linking directly to /room/[roomCode].
+  * Host Info Panel (Host Only): Room Code and Host Password.
+  * Parameter Management (Host Only): Download (.xlsx) standard schema template; Upload (.xlsx) bulk participant records.
+- Participant Input Form (All Devices):
+  * Name field.
+  * Radio selection for Gender (Male / Female).
+  * Dropdown for Level Preference (Small [P1,P2], Middle [P3,P4], Advanced [P5,P6], No Preference).
+  * Multi-select checkboxes for the 20 Scout Expertise options (專長).
+- Live Participant Roster:
+  * Real-time list of submitted individuals via WebSockets/SSE.
+  * Visual Status Banners: Standard Light Grey (processed); Light Green (#E6F4EA) (newly joined after algorithm execution).
+- Host Control Panel (Host Only):
+  * Group Count: Fixed display K = 6.
+  * Actions: "Run Grouping" (executes primary algorithm), "Allocate New Participants" (assigns Green participants without modifying locked groups), "Clear Grouping" (resets assignments, unlocks re-running while keeping raw participant data).
+
+#### 4. Data Schema
+Participant Object Schema (JSON):
+{
+  "id": "uuid-v4",
+  "name": "String",
+  "gender": "Male | Female",
+  "preference": "P1P2 | P3P4 | P5P6 | NONE",
+  "expertise": [0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // Array of 20 binary flags corresponding to the 20 Scout options
+  "status": "UNASSIGNED | ASSIGNED | NEW_UNASSIGNED",
+  "assignedGroup": "P1 | P2 | P3 | P4 | P5 | P6 | Null"
+}
+
+#### 5. Operational State Engine Matrix
+- Pre-Run: Data Form Active | "Run Grouping" Enabled | "Allocate New" Disabled | "Clear" Disabled
+- Post-Run: Data Form Active | "Run Grouping" Disabled | "Allocate New" Enabled | "Clear" Enabled
+- New Participant Added: Data Form Active | "Run Grouping" Disabled | "Allocate New" Enabled (Green Highlight) | "Clear" Enabled
+- Cleared: Data Form Active | "Run Grouping" Enabled | "Allocate New" Disabled | "Clear" Disabled
