@@ -48,6 +48,7 @@ import "./index.css";
 const queryClient = new QueryClient();
 const ROOM_KEY = "new-leaders-room:";
 const SESSION_KEY = "new-leaders-host:";
+const ACTIVE_ROOM_KEY = "activeRoom";
 const GROUP_CODES = ["P1", "P2", "P3", "P4", "P5", "P6"] as const;
 const GROUP_COLORS = ["#d89b36", "#c76d4b", "#3b887a", "#557b91", "#9b8b53", "#7f6254"];
 
@@ -77,6 +78,25 @@ function saveHostSession(code: string, password: string) {
   } catch {
     // Storage is optional.
   }
+}
+
+function setActiveRoom(code: string) {
+  try {
+    window.localStorage.setItem(ACTIVE_ROOM_KEY, code);
+  } catch {
+    // Session tracking is optional.
+  }
+}
+
+function leaveRoomSession(code: string) {
+  try {
+    window.localStorage.removeItem(ACTIVE_ROOM_KEY);
+    window.localStorage.removeItem(SESSION_KEY + code);
+  } catch {
+    // Storage is optional.
+  }
+  void queryClient.cancelQueries({ queryKey: getGetRoomQueryKey(code) });
+  queryClient.removeQueries({ queryKey: getGetRoomQueryKey(code) });
 }
 
 function hasHostSession(code: string) {
@@ -176,18 +196,22 @@ function BrandMark() {
   );
 }
 
-function Shell({ children }: { children: ReactNode }) {
+function Shell({ children, roomCode }: { children: ReactNode; roomCode?: string }) {
+  const [, setLocation] = useLocation();
   return (
     <div className="noise min-h-[100dvh]">
       <header className="border-b border-border/70 bg-background/80 px-5 py-4 backdrop-blur-md md:px-10">
         <div className="mx-auto flex max-w-[1440px] items-center justify-between">
-          <Link href="/" className="no-underline" data-testid="link-home"><BrandMark /></Link>
-          <div className="hidden items-center gap-7 md:flex">
-            <a href="#method" className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground" data-testid="link-method">How it works</a>
-            <a href="#principles" className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground" data-testid="link-principles">Principles</a>
-            <ConnectionStatus />
+          <Link href="/login" className="no-underline" data-testid="link-home"><BrandMark /></Link>
+          <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-7 md:flex">
+              <a href="#method" className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground" data-testid="link-method">How it works</a>
+              <a href="#principles" className="text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground" data-testid="link-principles">Principles</a>
+              <ConnectionStatus />
+            </div>
+            {roomCode && <button onClick={() => { leaveRoomSession(roomCode); setLocation("/login"); }} className="flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-[11px] font-bold text-primary transition-colors hover:bg-secondary" data-testid="button-leave-room"><X size={14} />離開房間 / 返回首頁</button>}
           </div>
-          <div className="md:hidden"><ConnectionStatus /></div>
+          {!roomCode && <div className="md:hidden"><ConnectionStatus /></div>}
         </div>
       </header>
       {children}
@@ -204,8 +228,14 @@ function Home() {
   const createRoom = useCreateRoom();
   const [hostName, setHostName] = useState("");
   const [roomCode, setRoomCode] = useState("");
+  const [reentryRoomCode, setReentryRoomCode] = useState("");
+  const [hostPassword, setHostPassword] = useState("");
+  const [showReentry, setShowReentry] = useState(false);
+  const [reentryError, setReentryError] = useState("");
   const [formError, setFormError] = useState("");
   const [copied, setCopied] = useState(false);
+  const reentryCode = reentryRoomCode.trim().toUpperCase();
+  const reentryQuery = useGetRoom(reentryCode, { query: { queryKey: getGetRoomQueryKey(reentryCode), enabled: false, retry: false } });
 
   const create = () => {
     const cleanName = hostName.trim();
@@ -218,15 +248,49 @@ function Home() {
       onSuccess: (room) => {
         saveRoom(room);
         saveHostSession(room.roomCode, room.hostPassword);
+        setActiveRoom(room.roomCode);
         setLocation(`/room/${room.roomCode}`);
       },
       onError: () => {
         const localRoom = makeFallbackRoom(cleanName);
         saveRoom(localRoom);
         saveHostSession(localRoom.roomCode, localRoom.hostPassword);
+        setActiveRoom(localRoom.roomCode);
         setLocation(`/room/${localRoom.roomCode}`);
       },
     });
+  };
+
+  const reenterHost = async () => {
+    const cleanCode = reentryRoomCode.trim().toUpperCase();
+    const cleanPassword = hostPassword.trim();
+    if (!/^\d{6}$/.test(cleanCode)) {
+      setReentryError("Enter the six-digit room code.");
+      return;
+    }
+    if (!cleanPassword) {
+      setReentryError("Enter the host password for this room.");
+      return;
+    }
+    setReentryError("");
+    try {
+      const result = await reentryQuery.refetch();
+      const room = result.data;
+      if (!room || room.hostPassword !== cleanPassword) throw new Error("invalid");
+      saveRoom(room);
+      saveHostSession(room.roomCode, cleanPassword);
+      setActiveRoom(room.roomCode);
+      setLocation(`/room/${room.roomCode}`);
+    } catch {
+      const cachedRoom = storageRoom(cleanCode);
+      if (cachedRoom?.hostPassword === cleanPassword) {
+        saveHostSession(cleanCode, cleanPassword);
+        setActiveRoom(cleanCode);
+        setLocation(`/room/${cleanCode}`);
+        return;
+      }
+      setReentryError("Room code or host password is not valid.");
+    }
   };
 
   const enter = () => {
@@ -290,6 +354,15 @@ function Home() {
                 <div className="flex gap-2">
                   <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} onKeyDown={(event) => event.key === "Enter" && enter()} placeholder="ROOM CODE" className="h-12 min-w-0 flex-1 rounded-xl border border-primary-foreground/20 bg-primary-foreground/10 px-4 font-mono-ui text-sm uppercase tracking-[.12em] outline-none placeholder:text-primary-foreground/35 focus:border-accent" data-testid="input-room-code" />
                   <button onClick={enter} className="flex h-12 items-center gap-2 rounded-xl border border-primary-foreground/20 px-4 text-sm font-bold transition-colors hover:bg-primary-foreground/10" data-testid="button-enter-room"><span className="hidden sm:inline">Enter</span><ArrowRight size={17} /></button>
+                </div>
+                <div className="mt-5 border-t border-primary-foreground/15 pt-5">
+                  <button onClick={() => { setShowReentry((current) => !current); setReentryError(""); }} className="flex items-center gap-2 text-xs font-bold text-accent hover:underline" data-testid="button-open-host-reentry"><LockKeyhole size={14} />Re-enter Room as Host</button>
+                  {showReentry && <div className="mt-4 space-y-3" data-testid="panel-host-reentry">
+                    <input value={reentryRoomCode} onChange={(event) => setReentryRoomCode(event.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(event) => event.key === "Enter" && void reenterHost()} placeholder="6-digit ROOM CODE" inputMode="numeric" className="h-11 w-full rounded-xl border border-primary-foreground/20 bg-primary-foreground/10 px-4 font-mono-ui text-sm tracking-[.12em] outline-none placeholder:text-primary-foreground/35 focus:border-accent" data-testid="input-reentry-room-code" />
+                    <input type="password" value={hostPassword} onChange={(event) => setHostPassword(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void reenterHost()} placeholder="HOST PASSWORD" className="h-11 w-full rounded-xl border border-primary-foreground/20 bg-primary-foreground/10 px-4 text-sm outline-none placeholder:text-primary-foreground/35 focus:border-accent" data-testid="input-reentry-host-password" />
+                    <button onClick={() => void reenterHost()} disabled={reentryQuery.isFetching} className="flex h-11 w-full items-center justify-between rounded-xl border border-primary-foreground/20 px-4 text-sm font-bold transition-colors hover:bg-primary-foreground/10 disabled:cursor-wait disabled:opacity-60" data-testid="button-reenter-host"><span>{reentryQuery.isFetching ? "Checking room…" : "Re-enter as Host"}</span><ArrowRight size={17} /></button>
+                    {reentryError && <p className="text-xs font-medium text-[#f2c38a]" data-testid="status-host-reentry-error">{reentryError}</p>}
+                  </div>}
                 </div>
               </div>
             </div>
@@ -373,10 +446,11 @@ function JoinPage() {
   const { roomCode = "" } = useParams<{ roomCode: string }>();
   const [submitted, setSubmitted] = useState(false);
   useEffect(() => {
+    setActiveRoom(roomCode);
     document.title = `Scout Leader Registration · ${roomCode}`;
     return () => { document.title = "新領袖 P1–P6 分組配置"; };
   }, [roomCode]);
-  return <Shell><main className="mx-auto max-w-2xl px-5 pb-16 pt-10 md:px-10"><div className="mb-7"><Link href={`/room/${roomCode}`} className="text-xs font-bold text-muted-foreground hover:text-primary" data-testid="link-back-dashboard">← Back to room</Link><p className="mt-8 font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Scout leader registration · room {roomCode}</p><h1 className="mt-3 text-4xl font-extrabold tracking-[-.07em] text-primary md:text-5xl">Scout Leader Registration</h1><p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">Share your signals so the host can make a fair P1–P6 allocation. Age and years of service are not collected.</p></div>{submitted ? <div className="card-surface rounded-2xl border border-border p-8 text-center"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-primary"><Check size={22} /></div><h2 className="mt-5 text-2xl font-bold text-primary">Registration received</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Your details are now in the live roster. You can close this page.</p></div> : <ParticipantForm roomCode={roomCode} onAdded={() => setSubmitted(true)} />}</main></Shell>;
+  return <Shell roomCode={roomCode}><main className="mx-auto max-w-2xl px-5 pb-16 pt-10 md:px-10"><div className="mb-7"><Link href={`/room/${roomCode}`} className="text-xs font-bold text-muted-foreground hover:text-primary" data-testid="link-back-dashboard">← Back to room</Link><p className="mt-8 font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Scout leader registration · room {roomCode}</p><h1 className="mt-3 text-4xl font-extrabold tracking-[-.07em] text-primary md:text-5xl">Scout Leader Registration</h1><p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">Share your signals so the host can make a fair P1–P6 allocation. Age and years of service are not collected.</p></div>{submitted ? <div className="card-surface rounded-2xl border border-border p-8 text-center"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-primary"><Check size={22} /></div><h2 className="mt-5 text-2xl font-bold text-primary">Registration received</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Your details are now in the live roster. You can close this page.</p></div> : <ParticipantForm roomCode={roomCode} onAdded={() => setSubmitted(true)} />}</main></Shell>;
 }
 
 function BulkParticipantImport({ roomCode, onAdded }: { roomCode: string; onAdded: (participant: Participant) => void }) {
@@ -488,6 +562,7 @@ function RoomPage() {
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState("");
   useEffect(() => {
+    setActiveRoom(roomCode);
     document.title = `Room ${roomCode} · 新領袖 P1–P6`;
     return () => { document.title = "新領袖 P1–P6 分組配置"; };
   }, [roomCode]);
@@ -528,10 +603,10 @@ function RoomPage() {
   const newCount = room?.participants.filter((participant) => participant.status === "NEW_UNASSIGNED").length ?? 0;
   const assignedCount = room?.participants.filter((participant) => participant.status === "ASSIGNED").length ?? 0;
 
-  if (roomQuery.isLoading && !room) return <Shell><SkeletonRoom /></Shell>;
-  if (!room) return <Shell><main className="mx-auto flex min-h-[65dvh] max-w-xl flex-col items-center justify-center px-5 text-center"><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-secondary text-primary"><LinkIcon size={23} /></div><h1 className="mt-6 text-3xl font-bold tracking-[-.05em] text-primary">This room is out of range.</h1><p className="mt-3 text-sm leading-6 text-muted-foreground">We could not find a live room with code <span className="font-mono-ui font-semibold text-foreground">{roomCode}</span>. Check the code and try again.</p><Link href="/" className="mt-7 flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground" data-testid="link-return-home">Return to room setup <ArrowRight size={15} /></Link></main></Shell>;
+  if (roomQuery.isLoading && !room) return <Shell roomCode={roomCode}><SkeletonRoom /></Shell>;
+  if (!room) return <Shell roomCode={roomCode}><main className="mx-auto flex min-h-[65dvh] max-w-xl flex-col items-center justify-center px-5 text-center"><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-secondary text-primary"><LinkIcon size={23} /></div><h1 className="mt-6 text-3xl font-bold tracking-[-.05em] text-primary">This room is out of range.</h1><p className="mt-3 text-sm leading-6 text-muted-foreground">We could not find a live room with code <span className="font-mono-ui font-semibold text-foreground">{roomCode}</span>. Check the code and try again.</p><Link href="/login" className="mt-7 flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground" data-testid="link-return-home">Return to room setup <ArrowRight size={15} /></Link></main></Shell>;
 
-  return <Shell>
+  return <Shell roomCode={roomCode}>
     <main className="mx-auto max-w-[1440px] px-5 pb-16 pt-7 md:px-10">
       <div className="flex flex-col gap-5 border-b border-border pb-7 md:flex-row md:items-end md:justify-between">
         <div><div className="flex flex-wrap items-center gap-3"><span className="font-mono-ui text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">Live field room</span><span className="rounded-full border border-[#5c9d72]/30 bg-[#5c9d72]/10 px-2 py-1 font-mono-ui text-[10px] font-medium uppercase tracking-[.12em] text-[#477d5b]">{room.status === "POST_RUN" ? "groups called" : "intake open"}</span></div><div className="mt-3 flex flex-wrap items-baseline gap-3"><h1 className="text-4xl font-extrabold tracking-[-.07em] text-primary md:text-5xl" data-testid="text-room-code">{room.roomCode}</h1><span className="text-sm text-muted-foreground">hosted by <strong className="text-foreground">{room.hostName}</strong></span></div></div>
@@ -571,7 +646,7 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
 }
 
 function Router() {
-  return <RoutedErrorBoundary><Switch><Route path="/" component={Home} /><Route path="/room/:roomCode/join" component={JoinPage} /><Route path="/room/:roomCode" component={RoomPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
+  return <RoutedErrorBoundary><Switch><Route path="/" component={Home} /><Route path="/login" component={Home} /><Route path="/room/:roomCode/join" component={JoinPage} /><Route path="/room/:roomCode" component={RoomPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
 }
 
 function App() {
