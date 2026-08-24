@@ -101,26 +101,131 @@ async function readZipEntries(buffer: ArrayBuffer) {
   return entries;
 }
 
+function xmlText(node: Element, name: string) {
+  return Array.from(node.getElementsByTagNameNS("*", name))
+    .map((part) => part.textContent ?? "")
+    .join("");
+}
+
+function columnIndexFromName(name: string) {
+  return [...name.toUpperCase()].reduce((total, character) => total * 26 + character.charCodeAt(0) - 64, 0) - 1;
+}
+
+function cellValue(cell: Element, sharedStrings: string[]) {
+  const type = cell.getAttribute("t");
+  const value = xmlText(cell, "v").trim();
+  if (type === "s" && value && Number.isInteger(Number(value))) return sharedStrings[Number(value)] ?? "";
+  if (type === "inlineStr") return xmlText(cell, "t").trim();
+  if (type === "b") return value === "1" ? "TRUE" : "FALSE";
+  return value || xmlText(cell, "t").trim();
+}
+
+function readWorksheetRows(worksheet: Uint8Array, sharedStrings: string[]) {
+  const doc = new DOMParser().parseFromString(decoder.decode(worksheet), "application/xml");
+  return Array.from(doc.getElementsByTagNameNS("*", "row")).map((row) => {
+    const values: string[] = [];
+    Array.from(row.children)
+      .filter((cell) => cell.localName === "c")
+      .forEach((cell) => {
+        const reference = cell.getAttribute("r")?.match(/^[A-Z]+/i)?.[0];
+        if (reference) values[columnIndexFromName(reference)] = cellValue(cell, sharedStrings);
+      });
+    return { rowNumber: Number(row.getAttribute("r")) || 0, values };
+  });
+}
+
+function normalizedHeader(value: string) {
+  return value.replace(/^\uFEFF/, "").trim().toLowerCase();
+}
+
+function findHeaderIndex(headers: string[], field: "name" | "gender" | "preference") {
+  const label = field === "name" ? "(?:leader\\s+)?name" : field;
+  const pattern = new RegExp(`^(?:${label}|[a-z]+\\s*\\(${field}\\))$`, "i");
+  return headers.findIndex((header) => pattern.test(normalizedHeader(header)));
+}
+
+function expertiseIndexFromHeader(header: string) {
+  const normalized = normalizedHeader(header);
+  const numbered = normalized.match(/^(?:e|expertise)[ _-]*0?([1-9]|1[0-9]|20)\b/);
+  if (numbered) return Number(numbered[1]) - 1;
+  const column = normalized.match(/^([a-z]+)\s*\(/)?.[1];
+  if (!column) return -1;
+  const index = columnIndexFromName(column);
+  return index >= 4 && index <= 23 ? index - 4 : -1;
+}
+
+function normalizePreference(value: string): "P1P2" | "P3P4" | "P5P6" | "NONE" {
+  const compact = normalizedHeader(value).replace(/[–—−]/g, "-").replace(/\s+/g, "");
+  if (/^p1-?2$/.test(compact) || compact === "p1p2") return "P1P2";
+  if (/^p3-?4$/.test(compact) || compact === "p3p4") return "P3P4";
+  if (/^p5-?6$/.test(compact) || compact === "p5p6") return "P5P6";
+  return "NONE";
+}
+
+function isEnabled(value: string) {
+  return /^(?:yes|y|true|1|x|on|✓|✔)$/i.test(value.trim());
+}
+
 export async function parseParticipantWorkbook(file: File) {
   const entries = await readZipEntries(await file.arrayBuffer());
-  const worksheet = entries.get("xl/worksheets/sheet1.xml");
-  if (!worksheet) throw new Error("The workbook must include a first worksheet.");
-  const doc = new DOMParser().parseFromString(decoder.decode(worksheet), "application/xml");
-  const rows = Array.from(doc.querySelectorAll("row")).map((row) => Array.from(row.querySelectorAll("c")).map((cell) => cell.querySelector("t")?.textContent?.trim() ?? cell.querySelector("v")?.textContent?.trim() ?? ""));
-  const [headers = [], ...data] = rows;
-  const indexes = new Map(headers.map((header, index) => [header.trim().toLowerCase(), index]));
-  if (!indexes.has("name") || !indexes.has("gender") || !indexes.has("preference")) throw new Error("Use the downloaded template so Name, Gender and Preference are present.");
-  return data.filter((row) => row.some(Boolean)).map((row, index) => {
-    const value = (key: string) => row[indexes.get(key) ?? -1]?.trim() ?? "";
-    const gender: "Male" | "Female" = value("gender").toLowerCase() === "male" ? "Male" : "Female";
-    const rawPreference = value("preference").toUpperCase();
-    const preference = (["P1P2", "P3P4", "P5P6", "NONE"].includes(rawPreference) ? rawPreference : "NONE") as "P1P2" | "P3P4" | "P5P6" | "NONE";
-    return {
-      row: index + 2,
-      name: value("name"),
-      gender,
-      preference,
-      expertise: Array.from({ length: 20 }, (_, expertiseIndex) => Number(value(`expertise_${String(expertiseIndex + 1).padStart(2, "0")}`)) ? 1 : 0),
-    };
-  }).filter((participant) => participant.name);
+  const sharedStringsFile = entries.get("xl/sharedStrings.xml");
+  const sharedStrings = sharedStringsFile
+    ? Array.from(new DOMParser().parseFromString(decoder.decode(sharedStringsFile), "application/xml").getElementsByTagNameNS("*", "si"))
+      .map((item) => xmlText(item, "t"))
+    : [];
+
+  const worksheetEntries = [...entries.entries()]
+    .filter(([name]) => /^xl\/worksheets\/[^/]+\.xml$/i.test(name))
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  for (const [, worksheet] of worksheetEntries) {
+    const rows = readWorksheetRows(worksheet, sharedStrings);
+    const headerRow = rows.find((candidate) => {
+      const headers = candidate.values.map((value) => value ?? "");
+      const requiredIndexes = [
+        findHeaderIndex(headers, "name"),
+        findHeaderIndex(headers, "gender"),
+        findHeaderIndex(headers, "preference"),
+      ];
+      return requiredIndexes.every((index) => index >= 0) && new Set(requiredIndexes).size === requiredIndexes.length;
+    });
+    if (!headerRow) continue;
+
+    const headers = headerRow.values.map((value) => value ?? "");
+    const nameIndex = findHeaderIndex(headers, "name");
+    const genderIndex = findHeaderIndex(headers, "gender");
+    const preferenceIndex = findHeaderIndex(headers, "preference");
+    const expertiseIndexes = Array.from({ length: 20 }, () => -1);
+    headers.forEach((header, index) => {
+      const expertiseIndex = expertiseIndexFromHeader(header);
+      if (expertiseIndex >= 0 && expertiseIndex < 20) expertiseIndexes[expertiseIndex] = index;
+    });
+
+    // If a workbook uses unlabelled expertise columns, keep compatibility with
+    // the template's fixed layout: the 20 columns immediately after preference.
+    if (expertiseIndexes.some((index) => index < 0) && preferenceIndex >= 0) {
+      expertiseIndexes.forEach((index, expertiseIndex) => {
+        if (index < 0) expertiseIndexes[expertiseIndex] = preferenceIndex + 1 + expertiseIndex;
+      });
+    }
+
+    return rows
+      .filter((candidate) => candidate.rowNumber > headerRow.rowNumber && candidate.values.some(Boolean))
+      .map((candidate) => {
+        const row = candidate.values;
+        const valueAt = (index: number) => (index >= 0 ? row[index]?.trim() ?? "" : "");
+        const rawGender = valueAt(genderIndex).toLowerCase();
+        const gender: "Male" | "Female" = rawGender === "male" || rawGender === "m" ? "Male" : "Female";
+        return {
+          row: candidate.rowNumber,
+          name: valueAt(nameIndex),
+          gender,
+          preference: normalizePreference(valueAt(preferenceIndex)),
+          expertise: expertiseIndexes.map((index) => isEnabled(valueAt(index)) ? 1 : 0),
+        };
+      })
+      .filter((participant) => participant.name);
+  }
+
+  throw new Error("No worksheet with Name, Gender and Preference columns was found. Upload the downloaded template or an Excel sheet with Name, Gender, Preference and E1–E20 columns.");
 }
