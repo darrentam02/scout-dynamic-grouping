@@ -66,7 +66,19 @@ function refreshGroups(room: Room) {
   }
 }
 
-function preferencePenalty(preference: Preference, code: GroupCode) {
+function expertisePreference(expertise: number[]): Preference {
+  if (expertise.slice(6, 14).some(Boolean)) return "P5P6";
+  if (expertise.slice(0, 2).some(Boolean)) return "P1P2";
+  if (expertise.slice(2, 6).some(Boolean)) return "P3P4";
+  return "NONE";
+}
+
+function preferencePenalty(participant: Participant, code: GroupCode) {
+  const mappedPreference = expertisePreference(participant.expertise);
+  const preference =
+    mappedPreference === "P5P6" || participant.preference === "NONE"
+      ? mappedPreference === "P5P6" ? "P5P6" : participant.preference
+      : participant.preference;
   if (preference === "NONE") return 0;
   const preferred =
     preference === "P1P2" ? ["P1", "P2"] :
@@ -142,7 +154,7 @@ function score(participant: Participant, group: Group, room: Room) {
   return (
     Math.max(0, currentSize - targetSize) * 2 +
     Math.abs(genderCount + 1 - average) * 0.9 +
-    preferencePenalty(participant.preference, group.code) * 0.7 +
+    preferencePenalty(participant, group.code) * (expertisePreference(participant.expertise) === "P5P6" ? 2.2 : 0.7) +
     expertiseScore * 0.25 +
     capacityBias
   );

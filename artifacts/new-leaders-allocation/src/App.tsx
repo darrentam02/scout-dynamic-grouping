@@ -42,6 +42,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import { createParticipantTemplate, parseParticipantWorkbook } from "@/lib/xlsx-lite";
+import { SCOUT_EXPERTISE_OPTIONS, SCOUT_EXPERTISE_TIERS } from "@/lib/constants";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -119,16 +120,17 @@ function runLocalGrouping(room: Room, onlyNew = false): Room {
     return { code, participantIds: lockedIds, maleCount: locked.filter((p) => p.assignedGroup === code && p.gender === "Male").length, femaleCount: locked.filter((p) => p.assignedGroup === code && p.gender === "Female").length };
   });
   const sorted = [...existing].sort((a, b) => {
-    const expertiseA = a.expertise.reduce((sum, value) => sum + value, 0);
-    const expertiseB = b.expertise.reduce((sum, value) => sum + value, 0);
-    return expertiseB - expertiseA;
+    const tierRank = (expertise: number[]) => expertise.slice(6, 14).some(Boolean) ? 0 : expertise.slice(0, 2).some(Boolean) ? 1 : expertise.slice(2, 6).some(Boolean) ? 2 : 3;
+    return tierRank(a.expertise) - tierRank(b.expertise) || b.expertise.reduce((sum, value) => sum + value, 0) - a.expertise.reduce((sum, value) => sum + value, 0);
   });
   const nextAssignments = new Map<string, GroupCode>();
   sorted.forEach((participant) => {
     const preferred = participant.preference === "P1P2" ? ["P1", "P2"] : participant.preference === "P3P4" ? ["P3", "P4"] : participant.preference === "P5P6" ? ["P5", "P6"] : [];
+    const expertisePreferred = participant.expertise.slice(6, 14).some(Boolean) ? ["P5", "P6"] : participant.expertise.slice(0, 2).some(Boolean) ? ["P1", "P2"] : participant.expertise.slice(2, 6).some(Boolean) ? ["P3", "P4"] : [];
+    const effectivePreferred = expertisePreferred.length ? expertisePreferred : preferred;
     const ordered = [...groups].sort((a, b) => {
-      const aPreference = preferred.includes(a.code) ? -2 : 0;
-      const bPreference = preferred.includes(b.code) ? -2 : 0;
+      const aPreference = effectivePreferred.includes(a.code) ? -4 : 0;
+      const bPreference = effectivePreferred.includes(b.code) ? -4 : 0;
       return aPreference - bPreference || a.participantIds.length - b.participantIds.length || a.maleCount - b.maleCount;
     });
     const target = ordered[0];
@@ -360,11 +362,21 @@ function ParticipantForm({ roomCode, onAdded }: { roomCode: string; onAdded: (pa
         <label className="text-xs font-bold text-muted-foreground">Gender<select value={gender} onChange={(event) => setGender(event.target.value as "Male" | "Female")} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-gender"><option value="Female">Female</option><option value="Male">Male</option></select></label>
         <label className="text-xs font-bold text-muted-foreground">Preference<select value={preference} onChange={(event) => setPreference(event.target.value as ParticipantInput["preference"])} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-preference"><option value="NONE">No preference</option><option value="P1P2">P1 or P2</option><option value="P3P4">P3 or P4</option><option value="P5P6">P5 or P6</option></select></label>
       </div>
-      <div className="mt-5"><div className="flex items-baseline justify-between"><label className="text-xs font-bold text-muted-foreground">Expertise profile</label><span className="font-mono-ui text-[10px] text-muted-foreground">{expertise.reduce((sum, item) => sum + item, 0)} / 20 signals</span></div><div className="mt-2 grid grid-cols-10 gap-1.5 rounded-lg border border-border bg-background p-2.5">{expertise.map((value, index) => <button type="button" key={index} onClick={() => toggleExpertise(index)} className={`h-5 rounded-sm transition-colors ${value ? "bg-primary" : "bg-muted hover:bg-secondary"}`} aria-label={`Expertise signal ${index + 1}`} data-testid={`button-expertise-${index}`} />)}</div></div>
+       <div className="mt-5"><div className="flex items-baseline justify-between"><label className="text-xs font-bold text-muted-foreground">Scout expertise</label><span className="font-mono-ui text-[10px] text-muted-foreground">{expertise.reduce((sum, item) => sum + item, 0)} / 20 selected</span></div><div className="mt-2 space-y-1.5 rounded-lg border border-border bg-background p-2.5">{SCOUT_EXPERTISE_TIERS.map((tier) => <div key={tier.label}><div className="px-1 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.14em] text-muted-foreground">{tier.label}</div><div className="grid gap-1 md:grid-cols-2">{SCOUT_EXPERTISE_OPTIONS.slice(tier.start, tier.end + 1).map((option, offset) => { const index = tier.start + offset; return <label key={option} className={`flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-[11px] leading-4 transition-colors ${expertise[index] ? "bg-primary/10 text-primary" : "hover:bg-secondary"}`}><input type="checkbox" checked={Boolean(expertise[index])} onChange={() => toggleExpertise(index)} className="mt-0.5 h-3.5 w-3.5 accent-primary" data-testid={`checkbox-expertise-${index}`} /><span>{option}</span></label>; })}</div></div>)}</div></div>
       <button onClick={submit} disabled={addParticipant.isPending} className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:opacity-70" data-testid="button-add-participant"><Plus size={16} />{addParticipant.isPending ? "Adding…" : "Add to roster"}</button>
       {message && <p className="mt-3 text-xs font-semibold text-primary" data-testid="status-participant-form">{message}</p>}
     </div>
   );
+}
+
+function JoinPage() {
+  const { roomCode = "" } = useParams<{ roomCode: string }>();
+  const [submitted, setSubmitted] = useState(false);
+  useEffect(() => {
+    document.title = `Scout Leader Registration · ${roomCode}`;
+    return () => { document.title = "新領袖 P1–P6 分組配置"; };
+  }, [roomCode]);
+  return <Shell><main className="mx-auto max-w-2xl px-5 pb-16 pt-10 md:px-10"><div className="mb-7"><Link href={`/room/${roomCode}`} className="text-xs font-bold text-muted-foreground hover:text-primary" data-testid="link-back-dashboard">← Back to room</Link><p className="mt-8 font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Scout leader registration · room {roomCode}</p><h1 className="mt-3 text-4xl font-extrabold tracking-[-.07em] text-primary md:text-5xl">Scout Leader Registration</h1><p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">Share your signals so the host can make a fair P1–P6 allocation. Age and years of service are not collected.</p></div>{submitted ? <div className="card-surface rounded-2xl border border-border p-8 text-center"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-primary"><Check size={22} /></div><h2 className="mt-5 text-2xl font-bold text-primary">Registration received</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Your details are now in the live roster. You can close this page.</p></div> : <ParticipantForm roomCode={roomCode} onAdded={() => setSubmitted(true)} />}</main></Shell>;
 }
 
 function BulkParticipantImport({ roomCode, onAdded }: { roomCode: string; onAdded: (participant: Participant) => void }) {
@@ -459,6 +471,10 @@ function RoomPage() {
   const [filter, setFilter] = useState<RosterFilter>("all");
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState("");
+  useEffect(() => {
+    document.title = `Room ${roomCode} · 新領袖 P1–P6`;
+    return () => { document.title = "新領袖 P1–P6 分組配置"; };
+  }, [roomCode]);
   const room = roomQuery.data ?? localRoom;
   const runGrouping = useRunGrouping();
   const allocateNew = useAllocateNewParticipants();
@@ -489,7 +505,7 @@ function RoomPage() {
     clearGrouping.mutate({ roomCode }, { onSuccess: (nextRoom) => { updateRoom(nextRoom); queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomCode) }); setToast("Assignments cleared. The roster is open again."); }, onError: () => { updateRoom({ ...room, status: "PRE_RUN", participants: room.participants.map((participant) => ({ ...participant, assignedGroup: null, status: "UNASSIGNED" as const })), groups: GROUP_CODES.map((code) => ({ code, participantIds: [], maleCount: 0, femaleCount: 0 })) }); setToast("Assignments cleared locally."); } });
   };
   const copyRoomLink = async () => {
-    try { await navigator.clipboard.writeText(`${window.location.origin}/room/${roomCode}`); } catch { /* unavailable in some previews */ }
+     try { await navigator.clipboard.writeText(`${window.location.origin}/room/${roomCode}/join`); } catch { /* unavailable in some previews */ }
     setCopied(true); window.setTimeout(() => setCopied(false), 1800);
   };
   const groups = useMemo(() => GROUP_CODES.map((code) => room?.groups.find((group) => group.code === code) ?? ({ code, participantIds: room?.participants.filter((p) => p.assignedGroup === code).map((p) => p.id) ?? [], maleCount: room?.participants.filter((p) => p.assignedGroup === code && p.gender === "Male").length ?? 0, femaleCount: room?.participants.filter((p) => p.assignedGroup === code && p.gender === "Female").length ?? 0 })), [room]);
@@ -538,7 +554,7 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
 }
 
 function Router() {
-  return <RoutedErrorBoundary><Switch><Route path="/" component={Home} /><Route path="/room/:roomCode" component={RoomPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
+  return <RoutedErrorBoundary><Switch><Route path="/" component={Home} /><Route path="/room/:roomCode/join" component={JoinPage} /><Route path="/room/:roomCode" component={RoomPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
 }
 
 function App() {
