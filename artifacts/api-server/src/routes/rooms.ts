@@ -35,10 +35,12 @@ type Room = {
   status: "PRE_RUN" | "POST_RUN";
   participants: Participant[];
   groups: Group[];
+  allocationWarnings: string[];
 };
 
 const groupCodes: GroupCode[] = ["P1", "P2", "P3", "P4", "P5", "P6"];
 const rooms = new Map<string, Room>();
+const similarFemaleThreshold = 0.75;
 
 const emptyGroups = (): Group[] =>
   groupCodes.map((code) => ({
@@ -98,66 +100,142 @@ function similarity(a: number[], b: number[]) {
   return aNorm && bNorm ? dot / (Math.sqrt(aNorm) * Math.sqrt(bNorm)) : 0;
 }
 
-function allocate(room: Room, onlyNew = false) {
-  refreshGroups(room);
-  const pool = room.participants
-    .filter((participant) => !onlyNew || participant.status === "NEW_UNASSIGNED")
-    .sort((a, b) => {
-      if (a.gender !== b.gender) return a.gender === "Female" ? -1 : 1;
-      if (a.preference !== b.preference) return a.preference.localeCompare(b.preference);
-      return a.name.localeCompare(b.name);
-    });
+function capacityByGroup(participantCount: number) {
+  const base = Math.floor(participantCount / groupCodes.length);
+  const remainder = participantCount % groupCodes.length;
+  return new Map(groupCodes.map((code, index) => [code, base + (index < remainder ? 1 : 0)]));
+}
 
+function groupMembers(group: Group, room: Room) {
+  const memberIds = new Set(group.participantIds);
+  return room.participants.filter((participant) => memberIds.has(participant.id));
+}
+
+function similarFemaleCount(participant: Participant, group: Group, room: Room) {
+  return groupMembers(group, room)
+    .filter((member) => member.gender === "Female")
+    .filter((member) => similarity(participant.expertise, member.expertise) >= similarFemaleThreshold)
+    .length;
+}
+
+function femaleSimilarityDegree(participant: Participant, females: Participant[]) {
+  return females.filter((other) => other.id !== participant.id)
+    .filter((other) => similarity(participant.expertise, other.expertise) >= similarFemaleThreshold)
+    .length;
+}
+
+function expertiseSignalCount(participant: Participant) {
+  return participant.expertise.reduce((count, value) => count + (value ? 1 : 0), 0);
+}
+
+function orderedGroupsFor(
+  participant: Participant,
+  room: Room,
+  capacities: Map<GroupCode, number>,
+) {
+  const withCapacity = room.groups.filter((group) => group.participantIds.length < (capacities.get(group.code) ?? 0));
+  if (!withCapacity.length) return [];
+
+  const eligible = participant.gender === "Female"
+    ? withCapacity.filter((group) => similarFemaleCount(participant, group, room) === 0)
+    : withCapacity;
+  const candidates = eligible.length ? eligible : withCapacity;
+
+  return [...candidates].sort((left, right) => {
+    const leftSimilar = participant.gender === "Female" ? similarFemaleCount(participant, left, room) : 0;
+    const rightSimilar = participant.gender === "Female" ? similarFemaleCount(participant, right, room) : 0;
+    const leftPreference = preferencePenalty(participant, left.code);
+    const rightPreference = preferencePenalty(participant, right.code);
+    const leftMembers = groupMembers(left, room);
+    const rightMembers = groupMembers(right, room);
+    const leftExpertiseOverlap = leftMembers.reduce((total, member) => total + similarity(participant.expertise, member.expertise), 0);
+    const rightExpertiseOverlap = rightMembers.reduce((total, member) => total + similarity(participant.expertise, member.expertise), 0);
+
+    return leftSimilar - rightSimilar
+      || left.femaleCount - right.femaleCount
+      || left.participantIds.length - right.participantIds.length
+      || leftPreference - rightPreference
+      || leftExpertiseOverlap - rightExpertiseOverlap
+      || left.code.localeCompare(right.code);
+  });
+}
+
+function collectAllocationWarnings(room: Room, capacities: Map<GroupCode, number>, onlyNew: boolean) {
+  const warnings: string[] = [];
+  const unassigned = room.participants.filter((participant) => !participant.assignedGroup);
+  if (unassigned.length) {
+    warnings.push(`${unassigned.length} ${onlyNew ? "new arrival" : "participant"}${unassigned.length === 1 ? "" : "s"} could not be placed because no group capacity remained.`);
+  }
+
+  for (const group of room.groups) {
+    const target = capacities.get(group.code) ?? 0;
+    if (group.participantIds.length > target) {
+      warnings.push(`${group.code} already has ${group.participantIds.length} leaders but its equal-allocation capacity is ${target}; existing assignments were kept.`);
+    }
+    const females = groupMembers(group, room).filter((participant) => participant.gender === "Female");
+    const similarNames = new Set<string>();
+    for (let index = 0; index < females.length; index += 1) {
+      for (let otherIndex = index + 1; otherIndex < females.length; otherIndex += 1) {
+        if (similarity(females[index].expertise, females[otherIndex].expertise) >= similarFemaleThreshold) {
+          similarNames.add(females[index].name);
+          similarNames.add(females[otherIndex].name);
+        }
+      }
+    }
+    if (similarNames.size) {
+      warnings.push(`${group.code} contains similar female expertise profiles (${[...similarNames].join(", ")}); all alternative group capacity was unavailable.`);
+    }
+  }
+  return warnings;
+}
+
+function allocate(room: Room, onlyNew = false) {
   if (!onlyNew) {
     for (const participant of room.participants) {
       participant.assignedGroup = null;
       participant.status = "UNASSIGNED";
     }
     refreshGroups(room);
+  } else {
+    refreshGroups(room);
   }
 
-  const females = pool.filter((participant) => participant.gender === "Female");
-  if (!onlyNew && females.length >= 6) {
-    for (let index = 0; index < 6; index += 1) {
-      place(females[index], room.groups[index], room);
-    }
+  const capacities = capacityByGroup(room.participants.length);
+  const pool = room.participants
+    .filter((participant) => !onlyNew || participant.status === "NEW_UNASSIGNED");
+  const females = pool
+    .filter((participant) => participant.gender === "Female")
+    .sort((left, right) =>
+      femaleSimilarityDegree(right, pool.filter((participant) => participant.gender === "Female"))
+      - femaleSimilarityDegree(left, pool.filter((participant) => participant.gender === "Female"))
+      || expertiseSignalCount(right) - expertiseSignalCount(left)
+      || left.name.localeCompare(right.name),
+    );
+
+  for (const participant of females) {
+    const target = orderedGroupsFor(participant, room, capacities)[0];
+    if (target) place(participant, target, room);
   }
 
-  for (const participant of pool) {
+  const remaining = pool
+    .filter((participant) => !participant.assignedGroup)
+    .sort((left, right) =>
+      preferencePenalty(left, "P1") - preferencePenalty(right, "P1")
+      || expertiseSignalCount(right) - expertiseSignalCount(left)
+      || left.name.localeCompare(right.name),
+    );
+  for (const participant of remaining) {
     if (participant.assignedGroup) continue;
-    const candidateGroups = [...room.groups].sort((a, b) => {
-      const aScore = score(participant, a, room);
-      const bScore = score(participant, b, room);
-      return aScore - bScore;
-    });
-    place(participant, candidateGroups[0], room);
+    const target = orderedGroupsFor(participant, room, capacities)[0];
+    if (target) place(participant, target, room);
   }
+
   room.status = "POST_RUN";
   room.participants.forEach((participant) => {
     if (participant.assignedGroup) participant.status = "ASSIGNED";
   });
   refreshGroups(room);
-}
-
-function score(participant: Participant, group: Group, room: Room) {
-  const targetSize = room.participants.length / 6;
-  const genderCount = participant.gender === "Female" ? group.femaleCount : group.maleCount;
-  const currentSize = group.participantIds.length;
-  const average = room.participants.filter((item) => item.gender === participant.gender)
-    .length / 6;
-  const members = room.participants.filter((item) => item.assignedGroup === group.code);
-  const centroid = Array.from({ length: 20 }, (_, index) =>
-    members.reduce((sum, item) => sum + (item.expertise[index] ?? 0), 0) / Math.max(members.length, 1),
-  );
-  const expertiseScore = members.length ? 1 - similarity(participant.expertise, centroid) : 0;
-  const capacityBias = group.code === "P5" || group.code === "P6" ? -0.15 : 0;
-  return (
-    Math.max(0, currentSize - targetSize) * 2 +
-    Math.abs(genderCount + 1 - average) * 0.9 +
-    preferencePenalty(participant, group.code) * (expertisePreference(participant.expertise) === "P5P6" ? 2.2 : 0.7) +
-    expertiseScore * 0.25 +
-    capacityBias
-  );
+  room.allocationWarnings = collectAllocationWarnings(room, capacities, onlyNew);
 }
 
 function place(participant: Participant, group: Group, room: Room) {
@@ -180,6 +258,7 @@ router.post("/rooms", (req, res) => {
     status: "PRE_RUN",
     participants: [],
     groups: emptyGroups(),
+    allocationWarnings: [],
   };
   rooms.set(room.roomCode, room);
   res.status(201).json(room);
@@ -233,6 +312,7 @@ router.post("/rooms/:roomCode/grouping/clear", (req, res) => {
     participant.status = "UNASSIGNED";
   });
   refreshGroups(room);
+  room.allocationWarnings = [];
   return res.json(room);
 });
 

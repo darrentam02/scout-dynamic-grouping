@@ -117,5 +117,6 @@ export interface Room {
   status: RoomStatus;
   participants: Participant[];
   groups: Group[];
+  allocationWarnings: string[];
 }
 

@@ -53,7 +53,8 @@ export const CreateRoomResponse = zod.object({
   "participantIds": zod.array(zod.string()),
   "maleCount": zod.number(),
   "femaleCount": zod.number()
-}))
+})),
+  "allocationWarnings": zod.array(zod.string())
 })
 
 
@@ -93,7 +94,8 @@ export const GetRoomResponse = zod.object({
   "participantIds": zod.array(zod.string()),
   "maleCount": zod.number(),
   "femaleCount": zod.number()
-}))
+})),
+  "allocationWarnings": zod.array(zod.string())
 })
 
 
@@ -174,7 +176,8 @@ export const RunGroupingResponse = zod.object({
   "participantIds": zod.array(zod.string()),
   "maleCount": zod.number(),
   "femaleCount": zod.number()
-}))
+})),
+  "allocationWarnings": zod.array(zod.string())
 })
 
 
@@ -214,7 +217,8 @@ export const AllocateNewParticipantsResponse = zod.object({
   "participantIds": zod.array(zod.string()),
   "maleCount": zod.number(),
   "femaleCount": zod.number()
-}))
+})),
+  "allocationWarnings": zod.array(zod.string())
 })
 
 
@@ -254,7 +258,8 @@ export const ClearGroupingResponse = zod.object({
   "participantIds": zod.array(zod.string()),
   "maleCount": zod.number(),
   "femaleCount": zod.number()
-}))
+})),
+  "allocationWarnings": zod.array(zod.string())
 })
 
 

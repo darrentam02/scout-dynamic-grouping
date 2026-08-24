@@ -163,7 +163,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Group"
-      required: [roomCode, hostName, hostPassword, status, participants, groups]
+        allocationWarnings:
+          type: array
+          items: { type: string }
+      required: [roomCode, hostName, hostPassword, status, participants, groups, allocationWarnings]
     ParticipantInput:
       type: object
       properties:

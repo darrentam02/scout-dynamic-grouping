@@ -58,7 +58,9 @@ type RosterFilter = "all" | "unassigned" | "new";
 function storageRoom(code: string) {
   try {
     const value = window.localStorage.getItem(ROOM_KEY + code);
-    return value ? (JSON.parse(value) as Room) : undefined;
+    if (!value) return undefined;
+    const room = JSON.parse(value) as Room & { allocationWarnings?: string[] };
+    return { ...room, allocationWarnings: room.allocationWarnings ?? [] };
   } catch {
     return undefined;
   }
@@ -116,6 +118,7 @@ function makeFallbackRoom(hostName: string): Room {
     status: "PRE_RUN",
     participants: [],
     groups: GROUP_CODES.map((code) => ({ code, participantIds: [], maleCount: 0, femaleCount: 0 })),
+    allocationWarnings: [],
   };
 }
 
@@ -128,42 +131,77 @@ function makeLocalParticipant(input: ParticipantInput): Participant {
   };
 }
 
+function expertiseSimilarity(left: number[], right: number[]) {
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < 20; index += 1) {
+    dot += (left[index] ?? 0) * (right[index] ?? 0);
+    leftNorm += (left[index] ?? 0) ** 2;
+    rightNorm += (right[index] ?? 0) ** 2;
+  }
+  return leftNorm && rightNorm ? dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm)) : 0;
+}
+
 function runLocalGrouping(room: Room, onlyNew = false): Room {
-  const existing = onlyNew
-    ? room.participants.filter((participant) => participant.status === "NEW_UNASSIGNED")
-    : room.participants;
-  const locked = onlyNew
-    ? room.participants.filter((participant) => participant.status === "ASSIGNED")
-    : [];
+  const locked = onlyNew ? room.participants.filter((participant) => participant.status === "ASSIGNED") : [];
+  const pool = onlyNew ? room.participants.filter((participant) => participant.status === "NEW_UNASSIGNED") : room.participants;
+  const capacity = new Map(GROUP_CODES.map((code, index) => [code, Math.floor(room.participants.length / 6) + (index < room.participants.length % 6 ? 1 : 0)]));
   const groups = GROUP_CODES.map((code) => {
-    const lockedIds = locked.filter((participant) => participant.assignedGroup === code).map((p) => p.id);
-    return { code, participantIds: lockedIds, maleCount: locked.filter((p) => p.assignedGroup === code && p.gender === "Male").length, femaleCount: locked.filter((p) => p.assignedGroup === code && p.gender === "Female").length };
+    const members = locked.filter((participant) => participant.assignedGroup === code);
+    return { code, participantIds: members.map((participant) => participant.id), maleCount: members.filter((participant) => participant.gender === "Male").length, femaleCount: members.filter((participant) => participant.gender === "Female").length };
   });
-  const sorted = [...existing].sort((a, b) => {
-    const tierRank = (expertise: number[]) => expertise.slice(6, 14).some(Boolean) ? 0 : expertise.slice(0, 2).some(Boolean) ? 1 : expertise.slice(2, 6).some(Boolean) ? 2 : 3;
-    return tierRank(a.expertise) - tierRank(b.expertise) || b.expertise.reduce((sum, value) => sum + value, 0) - a.expertise.reduce((sum, value) => sum + value, 0);
-  });
-  const nextAssignments = new Map<string, GroupCode>();
-  sorted.forEach((participant) => {
+  const assignments = new Map<string, GroupCode>(locked.flatMap((participant) => participant.assignedGroup ? [[participant.id, participant.assignedGroup] as const] : []));
+  const membersFor = (group: Group) => room.participants.filter((participant) => group.participantIds.includes(participant.id));
+  const similarFemaleCount = (participant: Participant, group: Group) => membersFor(group)
+    .filter((member) => member.gender === "Female")
+    .filter((member) => expertiseSimilarity(participant.expertise, member.expertise) >= 0.75)
+    .length;
+  const preferencePenalty = (participant: Participant, code: GroupCode) => {
     const preferred = participant.preference === "P1P2" ? ["P1", "P2"] : participant.preference === "P3P4" ? ["P3", "P4"] : participant.preference === "P5P6" ? ["P5", "P6"] : [];
-    const expertisePreferred = participant.expertise.slice(6, 14).some(Boolean) ? ["P5", "P6"] : participant.expertise.slice(0, 2).some(Boolean) ? ["P1", "P2"] : participant.expertise.slice(2, 6).some(Boolean) ? ["P3", "P4"] : [];
-    const effectivePreferred = expertisePreferred.length ? expertisePreferred : preferred;
-    const ordered = [...groups].sort((a, b) => {
-      const aPreference = effectivePreferred.includes(a.code) ? -4 : 0;
-      const bPreference = effectivePreferred.includes(b.code) ? -4 : 0;
-      return aPreference - bPreference || a.participantIds.length - b.participantIds.length || a.maleCount - b.maleCount;
-    });
-    const target = ordered[0];
-    nextAssignments.set(participant.id, target.code);
+    return preferred.length && !preferred.includes(code) ? 1 : 0;
+  };
+  const chooseGroup = (participant: Participant) => {
+    const candidates = groups.filter((group) => group.participantIds.length < (capacity.get(group.code) ?? 0));
+    const conflictFree = participant.gender === "Female" ? candidates.filter((group) => similarFemaleCount(participant, group) === 0) : candidates;
+    return [...(conflictFree.length ? conflictFree : candidates)].sort((left, right) =>
+      similarFemaleCount(participant, left) - similarFemaleCount(participant, right)
+      || left.femaleCount - right.femaleCount
+      || left.participantIds.length - right.participantIds.length
+      || preferencePenalty(participant, left.code) - preferencePenalty(participant, right.code)
+      || left.code.localeCompare(right.code),
+    )[0];
+  };
+  const females = pool.filter((participant) => participant.gender === "Female").sort((left, right) => {
+    const leftDegree = pool.filter((other) => other.id !== left.id && other.gender === "Female" && expertiseSimilarity(left.expertise, other.expertise) >= 0.75).length;
+    const rightDegree = pool.filter((other) => other.id !== right.id && other.gender === "Female" && expertiseSimilarity(right.expertise, other.expertise) >= 0.75).length;
+    return rightDegree - leftDegree || left.name.localeCompare(right.name);
+  });
+  const place = (participant: Participant) => {
+    const target = chooseGroup(participant);
+    if (!target) return;
+    assignments.set(participant.id, target.code);
     target.participantIds.push(participant.id);
-    if (participant.gender === "Male") target.maleCount += 1;
-    else target.femaleCount += 1;
-  });
+    if (participant.gender === "Female") target.femaleCount += 1;
+    else target.maleCount += 1;
+  };
+  females.forEach(place);
+  pool.filter((participant) => !assignments.has(participant.id)).sort((left, right) => left.name.localeCompare(right.name)).forEach(place);
+
   const participants = room.participants.map((participant) => {
-    const assignedGroup = nextAssignments.get(participant.id) ?? participant.assignedGroup;
-    return assignedGroup ? { ...participant, assignedGroup, status: "ASSIGNED" as const } : participant;
+    const assignedGroup = assignments.get(participant.id) ?? (onlyNew ? participant.assignedGroup : null);
+    return assignedGroup ? { ...participant, assignedGroup, status: "ASSIGNED" as const } : { ...participant, assignedGroup: null };
   });
-  return { ...room, status: "POST_RUN", participants, groups };
+  const warnings: string[] = [];
+  const unassigned = participants.filter((participant) => !participant.assignedGroup);
+  if (unassigned.length) warnings.push(`${unassigned.length} participant${unassigned.length === 1 ? "" : "s"} could not be placed because no group capacity remained.`);
+  groups.forEach((group) => {
+    const femalesInGroup = membersFor(group).filter((participant) => participant.gender === "Female");
+    if (femalesInGroup.some((participant, index) => femalesInGroup.slice(index + 1).some((other) => expertiseSimilarity(participant.expertise, other.expertise) >= 0.75))) {
+      warnings.push(`${group.code} contains similar female expertise profiles because no other capacity was available.`);
+    }
+  });
+  return { ...room, status: "POST_RUN", participants, groups, allocationWarnings: warnings };
 }
 
 function initials(name: string) {
@@ -589,11 +627,11 @@ function RoomPage() {
   const runGroupingAction = (onlyNew = false) => {
     if (!room) return;
     const mutation = onlyNew ? allocateNew : runGrouping;
-    mutation.mutate({ roomCode }, { onSuccess: (nextRoom) => { updateRoom(nextRoom); queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomCode) }); setToast(onlyNew ? "New arrivals placed into the locked groups." : "Six groups are ready to call."); }, onError: () => { const nextRoom = runLocalGrouping(room, onlyNew); updateRoom(nextRoom); setToast("Allocation saved locally. The room is ready to continue."); } });
+    mutation.mutate({ roomCode }, { onSuccess: (nextRoom) => { updateRoom(nextRoom); queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomCode) }); setToast((nextRoom.allocationWarnings?.length ?? 0) ? "Groups placed with allocation notes to review." : onlyNew ? "New arrivals placed into the locked groups." : "Six groups are ready to call."); }, onError: () => { const nextRoom = runLocalGrouping(room, onlyNew); setToast(nextRoom.allocationWarnings.length ? "Groups placed locally with allocation notes to review." : "Allocation saved locally. The room is ready to continue."); updateRoom(nextRoom); } });
   };
   const clearGroupingAction = () => {
     if (!room || !window.confirm("Clear assignments and keep everyone in the room?")) return;
-    clearGrouping.mutate({ roomCode }, { onSuccess: (nextRoom) => { updateRoom(nextRoom); queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomCode) }); setToast("Assignments cleared. The roster is open again."); }, onError: () => { updateRoom({ ...room, status: "PRE_RUN", participants: room.participants.map((participant) => ({ ...participant, assignedGroup: null, status: "UNASSIGNED" as const })), groups: GROUP_CODES.map((code) => ({ code, participantIds: [], maleCount: 0, femaleCount: 0 })) }); setToast("Assignments cleared locally."); } });
+    clearGrouping.mutate({ roomCode }, { onSuccess: (nextRoom) => { updateRoom(nextRoom); queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomCode) }); setToast("Assignments cleared. The roster is open again."); }, onError: () => { updateRoom({ ...room, status: "PRE_RUN", participants: room.participants.map((participant) => ({ ...participant, assignedGroup: null, status: "UNASSIGNED" as const })), groups: GROUP_CODES.map((code) => ({ code, participantIds: [], maleCount: 0, femaleCount: 0 })), allocationWarnings: [] }); setToast("Assignments cleared locally."); } });
   };
   const copyRoomLink = async () => {
      try { await navigator.clipboard.writeText(`${window.location.origin}/room/${roomCode}/join`); } catch { /* unavailable in some previews */ }
@@ -615,6 +653,7 @@ function RoomPage() {
 
       {roomQuery.isError && <div className="mt-5 flex items-center justify-between rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs font-semibold text-accent-foreground" data-testid="status-room-offline"><span>Server connection is quiet. This room is being served from its local field cache.</span><button onClick={() => roomQuery.refetch()} className="flex items-center gap-1.5 underline" data-testid="button-retry-room"><RefreshCw size={13} />Retry</button></div>}
       {toast && <div className="mt-5 rounded-xl border border-[#5c9d72]/30 bg-[#5c9d72]/10 px-4 py-3 text-xs font-semibold text-[#477d5b]" data-testid="status-room-action">{toast}</div>}
+      {(room.allocationWarnings?.length ?? 0) > 0 && <section className="mt-5 rounded-xl border border-accent/45 bg-accent/10 px-4 py-3" data-testid="panel-allocation-warnings"><p className="text-xs font-extrabold text-accent-foreground">Allocation notes</p><ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5 text-accent-foreground/90">{room.allocationWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></section>}
 
       <section className="mt-7 grid gap-4 md:grid-cols-3">
         <div className="card-surface rounded-2xl border border-border p-5"><div className="flex items-center justify-between"><span className="text-xs font-bold text-muted-foreground">Roster</span><Users size={17} className="text-primary" /></div><div className="mt-4 flex items-end gap-2"><span className="font-mono-ui text-4xl font-medium text-primary" data-testid="text-roster-count">{room.participants.length}</span><span className="pb-1 text-xs text-muted-foreground">people checked in</span></div><div className="mt-4 h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.min(room.participants.length * 8, 100)}%` }} /></div></div>
