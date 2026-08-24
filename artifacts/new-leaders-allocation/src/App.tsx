@@ -459,6 +459,22 @@ function Roster({ participants, filter, setFilter }: { participants: Participant
   </section>;
 }
 
+function JoinQrCode({ roomCode }: { roomCode: string }) {
+  const joinUrl = `${window.location.origin}/room/${roomCode}/join`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=10&data=${encodeURIComponent(joinUrl)}`;
+  return <section className="rounded-2xl border border-border bg-card/70 p-5" data-testid="panel-join-qr">
+    <div className="flex items-center justify-between gap-3">
+      <div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Fast entry</p><h2 className="mt-2 text-xl font-bold tracking-[-.04em] text-primary">Scan to join</h2></div>
+      <span className="rounded-full bg-secondary px-2.5 py-1 font-mono-ui text-[10px] font-medium uppercase tracking-[.12em] text-muted-foreground">Participant link</span>
+    </div>
+    <div className="mt-5 flex justify-center rounded-xl bg-white p-4">
+      <img src={qrUrl} alt={`QR code for participants to join room ${roomCode}`} className="h-48 w-48" data-testid="img-join-qr" />
+    </div>
+    <p className="mt-4 text-center text-xs leading-5 text-muted-foreground">Participants can scan this code to open the registration form directly.</p>
+    <a href={joinUrl} className="mt-3 block truncate text-center font-mono-ui text-[10px] font-medium text-primary underline underline-offset-4" data-testid="link-join-url">{joinUrl}</a>
+  </section>;
+}
+
 function RoomPage() {
   const params = useParams<{ roomCode: string }>();
   const roomCode = (params.roomCode || "").toUpperCase();
@@ -539,6 +555,7 @@ function RoomPage() {
         <aside className="space-y-5">
           <ParticipantForm roomCode={room.roomCode} onAdded={onAdded} />
           {hostUnlocked && <BulkParticipantImport roomCode={room.roomCode} onAdded={onAdded} />}
+           <JoinQrCode roomCode={room.roomCode} />
           <div className="rounded-2xl border border-primary/20 bg-primary p-5 text-primary-foreground" data-testid="panel-host-controls"><div className="flex items-center justify-between"><div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-primary-foreground/60">Host controls</p><h2 className="mt-2 text-xl font-bold tracking-[-.04em]">Call the room</h2></div><SlidersHorizontal size={19} className="text-accent" /></div>{hostUnlocked ? <div className="mt-6 space-y-2"><button onClick={() => runGroupingAction(false)} disabled={runGrouping.isPending || allocateNew.isPending || !room.participants.length} className="flex min-h-12 w-full items-center justify-between rounded-lg bg-accent px-4 text-sm font-extrabold text-accent-foreground transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45" data-testid="button-run-grouping"><span className="flex items-center gap-2"><Sparkles size={16} />Run grouping</span><ChevronRight size={17} /></button><button onClick={() => runGroupingAction(true)} disabled={allocateNew.isPending || !newCount} className="flex min-h-11 w-full items-center justify-between rounded-lg border border-primary-foreground/20 px-4 text-xs font-bold transition-colors hover:bg-primary-foreground/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="button-allocate-new"><span className="flex items-center gap-2"><Plus size={15} />Allocate new arrivals{newCount ? ` (${newCount})` : ""}</span><ChevronRight size={16} /></button><button onClick={clearGroupingAction} disabled={clearGrouping.isPending || !assignedCount} className="flex min-h-11 w-full items-center justify-between rounded-lg border border-primary-foreground/20 px-4 text-xs font-bold transition-colors hover:bg-primary-foreground/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="button-clear-grouping"><span className="flex items-center gap-2"><RotateCcw size={15} />Clear assignments</span><ChevronRight size={16} /></button></div> : <div className="mt-6 rounded-xl border border-primary-foreground/15 bg-primary-foreground/10 p-4"><p className="text-sm font-semibold leading-6">Controls are private to the host. Unlock them with the room credential.</p><button onClick={() => setShowAccess(true)} className="mt-4 text-xs font-bold text-accent underline underline-offset-4" data-testid="button-unlock-controls-panel">Enter host credential</button></div>}<div className="mt-6 flex items-center gap-2 border-t border-primary-foreground/15 pt-4 text-[11px] text-primary-foreground/60"><KeyRound size={13} /> Credential set at room creation</div></div>
           <div className="rounded-2xl border border-border bg-card/70 p-5"><div className="flex items-center gap-2 text-primary"><LinkIcon size={16} /><span className="text-xs font-bold">Room credentials</span></div><p className="mt-3 text-xs leading-5 text-muted-foreground">Keep these with the host. Participants only need the room code.</p><div className="mt-4 flex items-center justify-between rounded-lg bg-secondary px-3 py-2"><span className="font-mono-ui text-sm font-medium tracking-[.16em]" data-testid="text-room-credential">{hostUnlocked ? room.hostPassword : "••••••••"}</span>{hostUnlocked && <button onClick={() => navigator.clipboard?.writeText(room.hostPassword)} className="text-muted-foreground hover:text-primary" aria-label="Copy room credential" data-testid="button-copy-credential"><Copy size={14} /></button>}</div></div>
         </aside>
