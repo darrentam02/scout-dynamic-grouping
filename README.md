@@ -51,12 +51,13 @@ All routes live under `artifacts/api-server/src/routes` and are validated with z
 
 | Method | Path                           | Description                                  |
 | ------ | ------------------------------ | -------------------------------------------- |
-| POST   | `/rooms`                       | Create a room (host name)                    |
-| GET    | `/rooms/:roomCode`             | Fetch a room with roster + groups            |
-| POST   | `/rooms/:roomCode/participants`| Check a leader in (name, gender, 3 ranks, skills) |
-| POST   | `/rooms/:roomCode/grouping`    | Run full allocation                          |
-| POST   | `/rooms/:roomCode/grouping/new`| Allocate only new arrivals (locks existing)  |
-| POST   | `/rooms/:roomCode/grouping/clear`| Clear all assignments                      |
+| GET    | `/api/healthz`                 | Health check → `{"status":"ok"}`             |
+| POST   | `/api/rooms`                   | Create a room (host name)                    |
+| GET    | `/api/rooms/:roomCode`         | Fetch a room with roster + groups            |
+| POST   | `/api/rooms/:roomCode/participants`| Check a leader in (name, gender, 3 ranks, skills) |
+| POST   | `/api/rooms/:roomCode/grouping`| Run full allocation                          |
+| POST   | `/api/rooms/:roomCode/grouping/new`| Allocate only new arrivals (locks existing)|
+| POST   | `/api/rooms/:roomCode/grouping/clear`| Clear all assignments                     |
 
 ## Getting started
 
