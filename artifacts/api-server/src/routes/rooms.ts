@@ -15,6 +15,9 @@ import {
   DEFAULT_MC_CONFIG,
   expertiseToSkillVector,
 } from "@workspace/allocation";
+import { db } from "@workspace/db";
+import { roomsTable } from "@workspace/db/schema";
+import { eq } from "drizzle-orm";
 
 type GroupCode = "P1" | "P2" | "P3" | "P4" | "P5" | "P6";
 type Gender = "Male" | "Female";
@@ -82,7 +85,6 @@ type Room = {
 };
 
 const groupCodes: GroupCode[] = ["P1", "P2", "P3", "P4", "P5", "P6"];
-const rooms = new Map<string, Room>();
 const mcIterations = DEFAULT_MC_CONFIG.iterations;
 const mcSeed = DEFAULT_MC_CONFIG.seed;
 
@@ -94,10 +96,54 @@ const emptyGroups = (): Group[] =>
     femaleCount: 0,
   }));
 
-function makeRoomCode() {
+async function makeRoomCode() {
   let code = "";
-  do code = String(randomInt(100000, 1000000)); while (rooms.has(code));
+  do {
+    code = String(randomInt(100000, 1000000));
+  } while (
+    (await db
+      .select({ roomCode: roomsTable.roomCode })
+      .from(roomsTable)
+      .where(eq(roomsTable.roomCode, code))
+      .limit(1)).length > 0
+  );
   return code;
+}
+
+function roomFromRecord(record: typeof roomsTable.$inferSelect): Room {
+  return {
+    roomCode: record.roomCode,
+    hostName: record.hostName,
+    hostPassword: record.hostPassword,
+    status: record.status as Room["status"],
+    participants: record.participants as Participant[],
+    groups: record.groups as Group[],
+    allocationWarnings: record.allocationWarnings as string[],
+    mcSummary: record.mcSummary as MCAllocationSummary | null,
+  };
+}
+
+async function findRoom(roomCode: string) {
+  const [record] = await db
+    .select()
+    .from(roomsTable)
+    .where(eq(roomsTable.roomCode, roomCode))
+    .limit(1);
+  return record ? roomFromRecord(record) : undefined;
+}
+
+async function saveRoom(room: Room) {
+  await db
+    .update(roomsTable)
+    .set({
+      status: room.status,
+      participants: room.participants,
+      groups: room.groups,
+      allocationWarnings: room.allocationWarnings,
+      mcSummary: room.mcSummary,
+      updatedAt: new Date(),
+    })
+    .where(eq(roomsTable.roomCode, room.roomCode));
 }
 
 function buildLeaders(participants: Participant[]): LeaderInput[] {
@@ -248,10 +294,10 @@ function allocate(room: Room, onlyNew = false) {
 
 const router: IRouter = Router();
 
-router.post("/rooms", (req, res) => {
+router.post("/rooms", async (req, res) => {
   const input = CreateRoomBody.parse(req.body);
   const room: Room = {
-    roomCode: makeRoomCode(),
+    roomCode: await makeRoomCode(),
     hostName: input.hostName,
     hostPassword: `NL-${randomInt(1000, 10000)}`,
     status: "PRE_RUN",
@@ -260,20 +306,29 @@ router.post("/rooms", (req, res) => {
     allocationWarnings: [],
     mcSummary: null,
   };
-  rooms.set(room.roomCode, room);
+  await db.insert(roomsTable).values({
+    roomCode: room.roomCode,
+    hostName: room.hostName,
+    hostPassword: room.hostPassword,
+    status: room.status,
+    participants: room.participants,
+    groups: room.groups,
+    allocationWarnings: room.allocationWarnings,
+    mcSummary: room.mcSummary,
+  });
   res.status(201).json(room);
 });
 
-router.get("/rooms/:roomCode", (req, res) => {
+router.get("/rooms/:roomCode", async (req, res) => {
   const { roomCode } = GetRoomParams.parse(req.params);
-  const room = rooms.get(roomCode);
+  const room = await findRoom(roomCode);
   if (!room) return res.status(404).json({ error: "Room not found" });
   return res.json(room);
 });
 
-router.post("/rooms/:roomCode/participants", (req, res) => {
+router.post("/rooms/:roomCode/participants", async (req, res) => {
   const { roomCode } = GetRoomParams.parse(req.params);
-  const room = rooms.get(roomCode);
+  const room = await findRoom(roomCode);
   if (!room) return res.status(404).json({ error: "Room not found" });
   const input = AddParticipantBody.parse(req.body);
   const participant: Participant = {
@@ -283,28 +338,31 @@ router.post("/rooms/:roomCode/participants", (req, res) => {
     assignedGroup: null,
   };
   room.participants.push(participant);
+  await saveRoom(room);
   return res.status(201).json(participant);
 });
 
-router.post("/rooms/:roomCode/grouping", (req, res) => {
+router.post("/rooms/:roomCode/grouping", async (req, res) => {
   const { roomCode } = GetRoomParams.parse(req.params);
-  const room = rooms.get(roomCode);
+  const room = await findRoom(roomCode);
   if (!room) return res.status(404).json({ error: "Room not found" });
   allocate(room);
+  await saveRoom(room);
   return res.json(room);
 });
 
-router.post("/rooms/:roomCode/grouping/new", (req, res) => {
+router.post("/rooms/:roomCode/grouping/new", async (req, res) => {
   const { roomCode } = GetRoomParams.parse(req.params);
-  const room = rooms.get(roomCode);
+  const room = await findRoom(roomCode);
   if (!room) return res.status(404).json({ error: "Room not found" });
   allocate(room, true);
+  await saveRoom(room);
   return res.json(room);
 });
 
-router.post("/rooms/:roomCode/grouping/clear", (req, res) => {
+router.post("/rooms/:roomCode/grouping/clear", async (req, res) => {
   const { roomCode } = GetRoomParams.parse(req.params);
-  const room = rooms.get(roomCode);
+  const room = await findRoom(roomCode);
   if (!room) return res.status(404).json({ error: "Room not found" });
   room.status = "PRE_RUN";
   room.participants.forEach((participant) => {
@@ -314,6 +372,7 @@ router.post("/rooms/:roomCode/grouping/clear", (req, res) => {
   refreshGroups(room);
   room.allocationWarnings = [];
   room.mcSummary = null;
+  await saveRoom(room);
   return res.json(room);
 });
 

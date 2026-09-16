@@ -183,7 +183,25 @@ test("hosts can create a room, add a full roster, and persist six patrols", asyn
     assert.deepEqual(persisted.body.groups, grouped.body.groups);
     assert.deepEqual(persisted.body.participants, grouped.body.participants);
     assert.deepEqual(persisted.body.allocationWarnings, []);
+
+    await stopTestServer(server);
+    const restartedServer = await startTestServer();
+    try {
+      const reentered = await requestJson<Room>(
+        restartedServer,
+        `/rooms/${created.body.roomCode}`,
+      );
+
+      assert.equal(reentered.response.status, 200);
+      assert.equal(reentered.body.status, "POST_RUN");
+      assert.deepEqual(reentered.body.participants, grouped.body.participants);
+      assert.deepEqual(reentered.body.groups, grouped.body.groups);
+      assert.deepEqual(reentered.body.mcSummary, grouped.body.mcSummary);
+    } finally {
+      await stopTestServer(restartedServer);
+    }
   } finally {
+    if (!server.listening) return;
     await stopTestServer(server);
   }
 });

@@ -12,6 +12,7 @@ A live room-based tool that allocates Scout leaders into six balanced P1–P6 pa
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- Development persistence: provision PostgreSQL and set `DATABASE_URL` before starting the API, then run `pnpm --filter @workspace/db run push` after schema changes. Room records, rosters, and allocation results are stored in the `rooms` table.
 
 ## Stack
 

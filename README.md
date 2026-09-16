@@ -66,10 +66,13 @@ Requires `pnpm` (a `pnpm-workspace.yaml` monorepo).
 ```bash
 pnpm install
 pnpm run typecheck
+pnpm --filter @workspace/db run push             # provision/update the development rooms table
 pnpm --filter @workspace/api-server run dev        # API
 pnpm --filter @workspace/new-leaders-allocation run dev   # frontend
 pnpm --filter @workspace/api-server run test:e2e   # room → roster → six patrols
 ```
+
+The API requires `DATABASE_URL` to point to the development PostgreSQL database before it starts. Room records, participants, and grouping results are persisted in PostgreSQL, so restarting the API does not remove active rooms.
 
 ### Re-generating API clients
 
