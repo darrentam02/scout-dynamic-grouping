@@ -68,6 +68,7 @@ pnpm install
 pnpm run typecheck
 pnpm --filter @workspace/api-server run dev        # API
 pnpm --filter @workspace/new-leaders-allocation run dev   # frontend
+pnpm --filter @workspace/api-server run test:e2e   # room → roster → six patrols
 ```
 
 ### Re-generating API clients
