@@ -45,6 +45,7 @@ import { createParticipantTemplate, parseParticipantWorkbook } from "@/lib/xlsx-
 import { SCOUT_EXPERTISE_OPTIONS, SCOUT_EXPERTISE_TIERS } from "@/lib/constants";
 import {
   type LeaderInput,
+  type MCResult,
   runMonteCarlo,
   DEFAULT_KPI_CONFIG,
   DEFAULT_MC_CONFIG,
@@ -558,6 +559,62 @@ function GroupCard({ group, participants, index }: { group: Group; participants:
   </article>;
 }
 
+const SIM_ITERATIONS = [100, 500, 1000, 2000] as const;
+const SIM_METRICS: [string, keyof MCResult["distribution"]][] = [
+  ["1st choice hit rate", "rank1HitRates"],
+  ["2nd choice hit rate", "rank2HitRates"],
+  ["Gender parity score", "genderParityScores"],
+  ["Skill coverage", "coverageScores"],
+  ["Contribution fit", "contributionScores"],
+  ["Weighted KPI", "weightedTotals"],
+];
+
+function SimulationLab({ participants }: { participants: Participant[] }) {
+  const [iterations, setIterations] = useState(500);
+  const [result, setResult] = useState<MCResult | null>(null);
+  const pct = (value: number) => `${Math.round(value * 100)}%`;
+  const canRun = participants.length >= 6;
+
+  const run = () => {
+    const leaders = participants.map(toLeaderInput);
+    setResult(runMonteCarlo(leaders, DEFAULT_KPI_CONFIG, { iterations, seed: DEFAULT_MC_CONFIG.seed }));
+  };
+
+  const stats = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const q = (percentile: number) => sorted[Math.min(sorted.length - 1, Math.floor(percentile * sorted.length))];
+    const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+    return { mean, p10: q(0.1), p50: q(0.5), p90: q(0.9) };
+  };
+
+  const buckets = (() => {
+    if (!result) return null;
+    const values = result.distribution.weightedTotals;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const step = (max - min) / 10 || 1;
+    const counts = new Array<number>(10).fill(0);
+    for (const value of values) counts[Math.min(9, Math.floor((value - min) / step))]++;
+    return { counts, maxCount: Math.max(...counts), labels: counts.map((_, index) => `${Math.round((min + step * index) * 100)}%`) };
+  })();
+
+  const softRows: [string, number][] = result ? [
+    ["1st choice hit rate", result.kpi.rank1HitRate],
+    ["2nd choice hit rate", result.kpi.rank2HitRate],
+    ["3rd / forced rate", result.kpi.rank3OrForcedRate],
+    ["Gender parity score", result.kpi.genderParityScore],
+    ["Skill coverage", result.kpi.coverageScore],
+    ["Contribution fit", result.kpi.contributionScore],
+    ["Weighted KPI", result.kpi.weightedTotal],
+  ] : [];
+
+  return <section className="rounded-2xl border border-primary/20 bg-primary/5 p-5 md:p-6" data-testid="panel-simulation-lab">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Read-only · never touches the room</p><h2 className="mt-2 text-xl font-bold tracking-[-.04em]">Simulation lab</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">Run independent Monte Carlo simulations over the current roster to stress-test the hard-coded criteria against the soft-coded KPI.</p></div><div className="flex flex-wrap items-center gap-2">{SIM_ITERATIONS.map((option) => <button key={option} onClick={() => setIterations(option)} className={`h-9 rounded-lg px-3 font-mono-ui text-xs font-bold ${iterations === option ? "bg-primary text-primary-foreground" : "border border-border bg-card text-muted-foreground hover:bg-secondary"}`}>{option}</button>)}<button onClick={run} disabled={!canRun} className="flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-xs font-extrabold text-accent-foreground transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45" data-testid="button-run-simulation"><Sparkles size={14} />Run {iterations}</button></div></div>
+    {!canRun && <p className="mt-4 text-xs font-semibold text-muted-foreground">Add at least 6 leaders to the roster to run a simulation.</p>}
+    {result && buckets && <div className="mt-5"><div className="grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-border bg-card/60 p-4" data-testid="panel-sim-histogram"><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Weighted KPI across {result.iterations} runs</p><div className="mt-3 space-y-1">{buckets.counts.map((count, index) => <div key={index} className="flex items-center gap-2"><span className="w-11 shrink-0 font-mono-ui text-[10px] text-muted-foreground">{buckets.labels[index]}</span><div className="h-2.5 flex-1 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-primary" style={{ width: `${(count / buckets.maxCount) * 100}%` }} /></div><span className="w-6 shrink-0 text-right font-mono-ui text-[10px] text-muted-foreground">{count}</span></div>)}</div></div><div className="space-y-3"><div className="rounded-xl border border-border bg-card/60 p-4" data-testid="panel-sim-distribution"><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Distribution (mean · p10 · p50 · p90)</p><div className="mt-3 space-y-1.5">{SIM_METRICS.map(([label, key]) => { const s = stats(result.distribution[key] as number[]); return <div key={key} className="flex items-center justify-between gap-3 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono-ui text-muted-foreground">{pct(s.mean)} · <strong className="text-primary">{pct(s.p10)}</strong> · {pct(s.p50)} · {pct(s.p90)}</span></div>; })}</div></div><div className="rounded-xl border border-border bg-card/60 p-4" data-testid="panel-sim-best"><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Best run — {softRows.length ? `weighted KPI ${pct(result.kpi.weightedTotal)}` : ""}</p><div className="mt-3 grid gap-3 sm:grid-cols-3">{softRows.map(([label, value]) => <div key={label}><p className="text-[10px] font-bold text-muted-foreground">{label}</p><p className="mt-1 font-mono-ui text-lg font-medium text-primary">{pct(value)}</p></div>)}</div></div></div></div><div className="mt-3 rounded-xl border border-border bg-card/60 p-4" data-testid="panel-sim-hard"><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Hard result — best run</p><div className="mt-3 grid gap-3 sm:grid-cols-3">{GROUP_CODES.map((code) => { const group = result.allocation.groups[code]; const parity = result.metrics.groupParity[code]; return <div key={code} className="flex items-center justify-between rounded-lg border border-border px-3 py-2"><span className="font-mono-ui text-sm font-bold text-primary">{code}</span><span className="font-mono-ui text-[11px] text-muted-foreground">{group.maleCount}M / {group.femaleCount}F · parity {pct(parity)}</span></div>; })}</div><div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs"><span className="font-semibold text-foreground">{result.metrics.totalLeaders} of {participants.length} placed · {result.metrics.forcedCount} forced · {result.allocation.warnings.length} warnings</span><span className="font-mono-ui text-muted-foreground">{result.metrics.genderDistribution.males}M / {result.metrics.genderDistribution.females}F</span></div></div></div>}
+  </section>;
+}
+
 function SelectionCriteria() {
   const clusterLabels = ["P1/P2", "P3/P4", "P5/P6"] as const;
   const safetySkills = DEFAULT_KPI_CONFIG.safetySkills;
@@ -755,6 +812,7 @@ function RoomPage() {
           <section><div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Six fixed destinations</p><h2 className="mt-2 text-2xl font-bold tracking-[-.05em] text-primary">The group board</h2></div><p className="max-w-[300px] text-right text-xs leading-5 text-muted-foreground">Balance stays visible: headcount, gender mix, and the people inside each call.</p></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{groups.map((group, index) => <GroupCard key={group.code} group={group} participants={room.participants} index={index} />)}</div></section>
           {room.status === "POST_RUN" && <AllocationSummary room={room} />}
           <SelectionCriteria />
+          <SimulationLab participants={room.participants} />
           <Roster participants={room.participants} filter={filter} setFilter={setFilter} />
         </div>
         <aside className="space-y-5">
