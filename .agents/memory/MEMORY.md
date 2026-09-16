@@ -1,0 +1,1 @@
+- [Managed workflow restarts](managed-workflow-restarts.md) — start imported artifact services directly when verifying; parent restarts can race their managed listeners.

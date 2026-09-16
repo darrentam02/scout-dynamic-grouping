@@ -1,10 +1,12 @@
-# [Project name]
+# Scout Dynamic Grouping
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A live room-based tool that allocates Scout leaders into six balanced P1–P6 patrol groups using ranked preferences, gender parity, and skill coverage.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- Use the Replit run button to start the registered API and web workflows.
+- `pnpm --filter @workspace/api-server run dev` — run the API server when its workflow supplies `PORT` (8080)
+- `pnpm --filter @workspace/new-leaders-allocation run dev` — run the Vite frontend when its workflow supplies `PORT` and `BASE_PATH`
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -13,7 +15,7 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
+- pnpm workspaces, Node.js 20, TypeScript 5.9
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`
@@ -22,15 +24,26 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/new-leaders-allocation/` — Vite + React frontend
+- `artifacts/api-server/` — Express API and room routes
+- `lib/allocation/` — shared grouping engine
+- `lib/api-spec/openapi.yaml` — source of truth for API contracts
+- `lib/api-zod/` and `lib/api-client-react/` — generated validation and client packages
+- `lib/db/src/schema/` — Drizzle database schema
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- API traffic is routed at `/api`; the frontend is routed at `/`.
+- API contracts are defined in OpenAPI and generated into server validation and typed React clients.
+- Room state is persisted in PostgreSQL through Drizzle.
+- The allocation engine is a shared library consumed by both the API and frontend.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Hosts create live rooms and share room codes or links.
+- Leaders check in with ranked patrol preferences and skills.
+- Hosts generate six balanced patrol groups and review allocation KPIs.
+- Excel roster import supports bulk participant entry.
 
 ## User preferences
 
@@ -38,7 +51,9 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Do not run artifact dev commands from the workspace root without the workflow-provided `PORT` and `BASE_PATH`.
+- After editing `lib/api-spec/openapi.yaml`, run API generation before typechecking consumers.
+- Apply development schema changes with the database push command before starting the API.
 
 ## Pointers
 
