@@ -14,6 +14,7 @@ import {
   DEFAULT_KPI_CONFIG,
   DEFAULT_MC_CONFIG,
   expertiseToSkillVector,
+  type AllocateOptions,
 } from "@workspace/allocation";
 import { db } from "@workspace/db";
 import { roomsTable } from "@workspace/db/schema";
@@ -268,8 +269,18 @@ function allocate(room: Room, onlyNew = false) {
   );
 
   const mergedLeaders = buildLeaders([...previouslyAssigned, ...newArrivals]);
+  const lockedGroups: AllocateOptions["lockedGroups"] = new Map(
+    previouslyAssigned
+      .filter((participant) => participant.assignedGroup)
+      .map((participant) => [participant.id, participant.assignedGroup!]),
+  );
 
-  const mc = runMonteCarlo(mergedLeaders, DEFAULT_KPI_CONFIG, { iterations: mcIterations, seed: mcSeed });
+  const mc = runMonteCarlo(
+    mergedLeaders,
+    DEFAULT_KPI_CONFIG,
+    { iterations: mcIterations, seed: mcSeed },
+    { lockedGroups },
+  );
   const assignedByGroup = new Map<GroupCode, Set<string>>();
   for (const assignment of mc.allocation.allocations) {
     const group = assignedByGroup.get(assignment.group) ?? new Set<string>();

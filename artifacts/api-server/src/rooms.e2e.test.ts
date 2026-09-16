@@ -205,3 +205,127 @@ test("hosts can create a room, add a full roster, and persist six patrols", asyn
     await stopTestServer(server);
   }
 });
+
+test("late arrivals keep locked patrols and clear grouping preserves the roster", async () => {
+  const server = await startTestServer();
+  const lateArrivalInput = { ...makeParticipantInput(0), name: "Late Arrival" };
+
+  try {
+    const created = await requestJson<Room>(server, "/rooms", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostName: "Late Arrival Host" }),
+    });
+    assert.equal(created.response.status, 201);
+
+    const participantIds: string[] = [];
+    for (const input of Array.from({ length: 36 }, (_, index) =>
+      makeParticipantInput(index),
+    )) {
+      const added = await requestJson<Participant>(
+        server,
+        `/rooms/${created.body.roomCode}/participants`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      assert.equal(added.response.status, 201);
+      participantIds.push(added.body.id);
+    }
+
+    const initial = await requestJson<Room>(
+      server,
+      `/rooms/${created.body.roomCode}/grouping`,
+      { method: "POST" },
+    );
+    assert.equal(initial.response.status, 200);
+    assert.equal(initial.body.status, "POST_RUN");
+
+    const originalAssignments = new Map(
+      initial.body.participants.map((participant) => [
+        participant.id,
+        participant.assignedGroup,
+      ]),
+    );
+    assert.equal(originalAssignments.size, 36);
+    assert.ok([...originalAssignments.values()].every(Boolean));
+
+    const lateArrival = await requestJson<Participant>(
+      server,
+      `/rooms/${created.body.roomCode}/participants`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(lateArrivalInput),
+      },
+    );
+    assert.equal(lateArrival.response.status, 201);
+    assert.equal(lateArrival.body.status, "NEW_UNASSIGNED");
+    assert.equal(lateArrival.body.assignedGroup, null);
+
+    const incremented = await requestJson<Room>(
+      server,
+      `/rooms/${created.body.roomCode}/grouping/new`,
+      { method: "POST" },
+    );
+    assert.equal(incremented.response.status, 200);
+    assert.equal(incremented.body.status, "POST_RUN");
+    assert.equal(incremented.body.participants.length, 37);
+
+    for (const participant of incremented.body.participants) {
+      if (participant.id === lateArrival.body.id) continue;
+      assert.equal(
+        participant.assignedGroup,
+        originalAssignments.get(participant.id),
+        `${participant.name} moved patrols`,
+      );
+    }
+
+    const updatedLateArrival = incremented.body.participants.find(
+      (participant) => participant.id === lateArrival.body.id,
+    );
+    assert.ok(updatedLateArrival);
+    if (updatedLateArrival.assignedGroup) {
+      assert.ok(GROUP_CODES.includes(updatedLateArrival.assignedGroup));
+    } else {
+      assert.equal(updatedLateArrival.status, "NEW_UNASSIGNED");
+      assert.match(incremented.body.allocationWarnings.join(" "), /new arrival/);
+    }
+
+    for (const group of incremented.body.groups) {
+      assert.ok(group.participantIds.length <= 6, `${group.code} exceeded capacity`);
+      assert.equal(
+        group.participantIds.filter(
+          (participantId) =>
+            originalAssignments.get(participantId) === group.code,
+        ).length,
+        group.participantIds.filter((participantId) =>
+          participantIds.includes(participantId),
+        ).length,
+      );
+    }
+
+    const cleared = await requestJson<Room>(
+      server,
+      `/rooms/${created.body.roomCode}/grouping/clear`,
+      { method: "POST" },
+    );
+    assert.equal(cleared.response.status, 200);
+    assert.equal(cleared.body.status, "PRE_RUN");
+    assert.equal(cleared.body.participants.length, 37);
+    assert.ok(
+      cleared.body.participants.every(
+        (participant) =>
+          participant.status === "UNASSIGNED" &&
+          participant.assignedGroup === null,
+      ),
+    );
+    assert.ok(cleared.body.groups.every((group) => group.participantIds.length === 0));
+    assert.deepEqual(cleared.body.allocationWarnings, []);
+    assert.equal(cleared.body.mcSummary, null);
+  } finally {
+    if (server.listening) await stopTestServer(server);
+  }
+});

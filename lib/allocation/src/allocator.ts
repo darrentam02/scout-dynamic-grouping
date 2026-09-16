@@ -18,9 +18,14 @@ import {
 const CLUSTER_CAP = 12;
 const GROUP_CAP = 6;
 
+export type AllocateOptions = {
+  lockedGroups?: ReadonlyMap<string, GroupCode>;
+};
+
 export function allocate(
   leaders: LeaderInput[],
   config: KPIConfig,
+  options: AllocateOptions = {},
 ): AllocationResult {
   const groups = {} as AllocationResult["groups"];
   for (const code of GROUP_CODES) {
@@ -43,6 +48,38 @@ export function allocate(
     P5P6: [],
   };
   const placed = new Set<string>();
+
+  if (options.lockedGroups) {
+    const leadersById = new Map(leaders.map((leader) => [leader.id, leader]));
+
+    for (const [leaderId, groupCode] of options.lockedGroups) {
+      const leader = leadersById.get(leaderId);
+      if (!leader) continue;
+
+      const group = result.groups[groupCode];
+      if (!group) continue;
+
+      group.leaderIds.push(leader.id);
+      if (leader.gender === "Male") group.maleCount++;
+      else group.femaleCount++;
+      result.clusters[clusterForGroup(groupCode)].leaderIds.push(leader.id);
+      result.allocations.push({
+        leaderId: leader.id,
+        group: groupCode,
+        cluster: clusterForGroup(groupCode),
+        matchedRank: matchedRank(leader, clusterForGroup(groupCode)),
+      });
+      placed.add(leader.id);
+    }
+
+    allocateIntoOpenGroups(
+      leaders.filter((leader) => !placed.has(leader.id)),
+      result,
+      config,
+    );
+
+    return result;
+  }
 
   // Step 1: Safety locks
   for (const leader of leaders) {
@@ -128,6 +165,52 @@ export function allocate(
   }
 
   return result;
+}
+
+function clusterForGroup(groupCode: GroupCode): ClusterCode {
+  if (groupCode === "P1" || groupCode === "P2") return "P1P2";
+  if (groupCode === "P3" || groupCode === "P4") return "P3P4";
+  return "P5P6";
+}
+
+function allocateIntoOpenGroups(
+  leaders: LeaderInput[],
+  result: AllocationResult,
+  config: KPIConfig,
+) {
+  for (const leader of leaders) {
+    const candidates = GROUP_CODES
+      .map((groupCode) => {
+        const group = result.groups[groupCode];
+        const cluster = clusterForGroup(groupCode);
+        return {
+          groupCode,
+          cluster,
+          score: totalScore(leader, cluster, config),
+          remaining: GROUP_CAP - group.leaderIds.length,
+        };
+      })
+      .filter((candidate) => candidate.remaining > 0)
+      .sort((a, b) => b.score - a.score || b.remaining - a.remaining);
+
+    const candidate = candidates[0];
+    if (!candidate) {
+      result.warnings.push(`${leader.name} could not be placed — all groups at capacity.`);
+      continue;
+    }
+
+    const group = result.groups[candidate.groupCode];
+    group.leaderIds.push(leader.id);
+    if (leader.gender === "Male") group.maleCount++;
+    else group.femaleCount++;
+    result.clusters[candidate.cluster].leaderIds.push(leader.id);
+    result.allocations.push({
+      leaderId: leader.id,
+      group: candidate.groupCode,
+      cluster: candidate.cluster,
+      matchedRank: matchedRank(leader, candidate.cluster),
+    });
+  }
 }
 
 function splitClusterPool(

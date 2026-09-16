@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import { GROUP_CODES } from "./types";
 import { allocate, shuffleWithSeed } from "./allocator";
+import type { AllocateOptions } from "./allocator";
 
 export function computeMetrics(allocation: AllocationResult): AllocationMetrics {
   const rankCounts: [number, number, number] = [0, 0, 0];
@@ -108,8 +109,9 @@ export type FixedResult = {
 export function runFixed(
   leaders: LeaderInput[],
   config: KPIConfig,
+  options: AllocateOptions = {},
 ): FixedResult {
-  const allocation = allocate(leaders, config);
+  const allocation = allocate(leaders, config, options);
   const metrics = computeMetrics(allocation);
   const kpi = computeKPI(metrics, config);
   return { allocation, metrics, kpi };
@@ -134,6 +136,7 @@ export function runMonteCarlo(
   leaders: LeaderInput[],
   config: KPIConfig,
   mcConfig: MCConfig,
+  options: AllocateOptions = {},
 ): MCResult {
   const { iterations, seed } = mcConfig;
   const distribution: MCDistribution = {
@@ -151,7 +154,7 @@ export function runMonteCarlo(
   for (let i = 0; i < iterations; i++) {
     const runSeed = seed + i;
     const shuffled = shuffleWithSeed(leaders, runSeed);
-    const allocation = allocate(shuffled, config);
+    const allocation = allocate(shuffled, config, options);
     const metrics = computeMetrics(allocation);
     const kpi = computeKPI(metrics, config);
 
@@ -169,7 +172,7 @@ export function runMonteCarlo(
   }
 
   return {
-    ...(bestResult ?? runFixed(leaders, config)),
+    ...(bestResult ?? runFixed(leaders, config, options)),
     distribution,
     iterations,
     seed,
