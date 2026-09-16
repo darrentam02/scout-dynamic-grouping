@@ -15,6 +15,11 @@ export const MCAllocationSummary = zod.object({
     "rankCounts": zod.tuple([zod.number(), zod.number(), zod.number()]),
     "forcedCount": zod.number()
   }),
+  "metrics": zod.object({
+    "groupParity": zod.record(zod.string(), zod.number()),
+    "genderDistribution": zod.object({ "males": zod.number(), "females": zod.number() }),
+    "totalLeaders": zod.number()
+  }),
   "distribution": zod.object({
     "rank1HitRate": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),
     "rank2HitRate": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),

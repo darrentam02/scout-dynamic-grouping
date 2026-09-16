@@ -188,6 +188,21 @@ components:
               items: { type: integer }
             forcedCount: { type: integer }
           required: [kpi, rankCounts, forcedCount]
+        metrics:
+          type: object
+          properties:
+            groupParity:
+              type: object
+              additionalProperties:
+                type: number
+            genderDistribution:
+              type: object
+              properties:
+                males: { type: integer }
+                females: { type: integer }
+              required: [males, females]
+            totalLeaders: { type: integer }
+          required: [groupParity, genderDistribution, totalLeaders]
         distribution:
           type: object
           properties:
@@ -198,7 +213,7 @@ components:
             contributionScore: { $ref: "#/components/schemas/McStats" }
             weightedTotal: { $ref: "#/components/schemas/McStats" }
           required: [rank1HitRate, rank2HitRate, genderParityScore, coverageScore, contributionScore, weightedTotal]
-      required: [iterations, seed, best, distribution]
+      required: [iterations, seed, best, metrics, distribution]
     McStats:
       type: object
       properties:

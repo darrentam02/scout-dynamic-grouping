@@ -55,6 +55,11 @@ type MCAllocationSummary = {
     rankCounts: [number, number, number];
     forcedCount: number;
   };
+  metrics: {
+    groupParity: Record<GroupCode, number>;
+    genderDistribution: { males: number; females: number };
+    totalLeaders: number;
+  };
   distribution: {
     rank1HitRate: McStats;
     rank2HitRate: McStats;
@@ -134,6 +139,11 @@ function summarizeMc(mc: MCResult): MCAllocationSummary {
       kpi: mc.kpi,
       rankCounts: mc.metrics.rankCounts,
       forcedCount: mc.metrics.forcedCount,
+    },
+    metrics: {
+      groupParity: mc.metrics.groupParity,
+      genderDistribution: mc.metrics.genderDistribution,
+      totalLeaders: mc.metrics.totalLeaders,
     },
     distribution: {
       rank1HitRate: statsFor(distribution.rank1HitRates),
