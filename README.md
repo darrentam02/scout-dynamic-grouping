@@ -43,7 +43,7 @@ weighted = rank1HitRate × 0.4 + rank2HitRate × 0.2
         + genderParity × 0.2 + coverage × 0.1 + contribution × 0.1
 ```
 
-Monte Carlo runs with seed `20260916` (default in `DEFAULT_MC_CONFIG`) and returns the best-scoring assignment along with a distribution summary.
+Monte Carlo runs server-side on every grouping call with seed `20260916` (default in `DEFAULT_MC_CONFIG`), keeping the best-scoring assignment. Every response includes `mcSummary`: the winning KPI, rank hit counts, and a mean / P10 / P50 / P90 distribution summary across all 500 runs.
 
 ## API
 

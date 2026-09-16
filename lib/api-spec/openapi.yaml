@@ -166,7 +166,51 @@ components:
         allocationWarnings:
           type: array
           items: { type: string }
+        mcSummary:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/MCAllocationSummary"
       required: [roomCode, hostName, hostPassword, status, participants, groups, allocationWarnings]
+    MCAllocationSummary:
+      type: object
+      properties:
+        iterations: { type: integer }
+        seed: { type: integer }
+        best:
+          type: object
+          properties:
+            kpi:
+              $ref: "#/components/schemas/KPIResult"
+            rankCounts:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items: { type: integer }
+            forcedCount: { type: integer }
+          required: [kpi, rankCounts, forcedCount]
+        distribution:
+          type: object
+          properties:
+            rank1HitRate: { $ref: "#/components/schemas/McStats" }
+            rank2HitRate: { $ref: "#/components/schemas/McStats" }
+            genderParityScore: { $ref: "#/components/schemas/McStats" }
+            coverageScore: { $ref: "#/components/schemas/McStats" }
+            contributionScore: { $ref: "#/components/schemas/McStats" }
+            weightedTotal: { $ref: "#/components/schemas/McStats" }
+          required: [rank1HitRate, rank2HitRate, genderParityScore, coverageScore, contributionScore, weightedTotal]
+      required: [iterations, seed, best, distribution]
+    McStats:
+      type: object
+      properties:
+        mean: { type: number }
+        p10: { type: number }
+        p50: { type: number }
+        p90: { type: number }
+      required: [mean, p10, p50, p90]
+    KPIResult:
+      type: object
+      additionalProperties:
+        type: number
     ParticipantInput:
       type: object
       properties:

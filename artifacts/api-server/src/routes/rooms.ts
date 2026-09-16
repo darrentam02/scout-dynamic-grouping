@@ -7,8 +7,12 @@ import {
 } from "@workspace/api-zod";
 import {
   type PreferenceTier,
-  allocate as engineAllocate,
+  type LeaderInput,
+  type MCResult,
+  type KPIResult,
+  runMonteCarlo,
   DEFAULT_KPI_CONFIG,
+  DEFAULT_MC_CONFIG,
   expertiseToSkillVector,
 } from "@workspace/allocation";
 
@@ -36,6 +40,31 @@ type Group = {
   femaleCount: number;
 };
 
+type McStats = {
+  mean: number;
+  p10: number;
+  p50: number;
+  p90: number;
+};
+
+type MCAllocationSummary = {
+  iterations: number;
+  seed: number;
+  best: {
+    kpi: KPIResult;
+    rankCounts: [number, number, number];
+    forcedCount: number;
+  };
+  distribution: {
+    rank1HitRate: McStats;
+    rank2HitRate: McStats;
+    genderParityScore: McStats;
+    coverageScore: McStats;
+    contributionScore: McStats;
+    weightedTotal: McStats;
+  };
+};
+
 type Room = {
   roomCode: string;
   hostName: string;
@@ -44,10 +73,13 @@ type Room = {
   participants: Participant[];
   groups: Group[];
   allocationWarnings: string[];
+  mcSummary: MCAllocationSummary | null;
 };
 
 const groupCodes: GroupCode[] = ["P1", "P2", "P3", "P4", "P5", "P6"];
 const rooms = new Map<string, Room>();
+const mcIterations = DEFAULT_MC_CONFIG.iterations;
+const mcSeed = DEFAULT_MC_CONFIG.seed;
 
 const emptyGroups = (): Group[] =>
   groupCodes.map((code) => ({
@@ -63,6 +95,57 @@ function makeRoomCode() {
   return code;
 }
 
+function buildLeaders(participants: Participant[]): LeaderInput[] {
+  return participants.map((participant) => ({
+    id: participant.id,
+    name: participant.name,
+    gender: participant.gender,
+    rankPreferences: [
+      participant.preference,
+      participant.rank2Preference,
+      participant.rank3Preference,
+    ] as [Preference, Preference, Preference],
+    skills: expertiseToSkillVector(participant.expertise),
+  }));
+}
+
+function quantile(sorted: number[], pct: number) {
+  const index = Math.min(sorted.length - 1, Math.floor(pct * sorted.length));
+  return Number(sorted[index].toFixed(4));
+}
+
+function statsFor(values: number[]): McStats {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  return {
+    mean: Number(mean.toFixed(4)),
+    p10: quantile(sorted, 0.1),
+    p50: quantile(sorted, 0.5),
+    p90: quantile(sorted, 0.9),
+  };
+}
+
+function summarizeMc(mc: MCResult): MCAllocationSummary {
+  const { distribution, iterations, seed } = mc;
+  return {
+    iterations,
+    seed,
+    best: {
+      kpi: mc.kpi,
+      rankCounts: mc.metrics.rankCounts,
+      forcedCount: mc.metrics.forcedCount,
+    },
+    distribution: {
+      rank1HitRate: statsFor(distribution.rank1HitRates),
+      rank2HitRate: statsFor(distribution.rank2HitRates),
+      genderParityScore: statsFor(distribution.genderParityScores),
+      coverageScore: statsFor(distribution.coverageScores),
+      contributionScore: statsFor(distribution.contributionScores),
+      weightedTotal: statsFor(distribution.weightedTotals),
+    },
+  };
+}
+
 function refreshGroups(room: Room) {
   room.groups = emptyGroups();
   for (const participant of room.participants) {
@@ -76,19 +159,9 @@ function refreshGroups(room: Room) {
 }
 
 function applyEngineResult(room: Room) {
-  const leaders = room.participants.map((participant) => ({
-    id: participant.id,
-    name: participant.name,
-    gender: participant.gender,
-    rankPreferences: [
-      participant.preference,
-      participant.rank2Preference,
-      participant.rank3Preference,
-    ] as [Preference, Preference, Preference],
-    skills: expertiseToSkillVector(participant.expertise),
-  }));
-
-  const result = engineAllocate(leaders, DEFAULT_KPI_CONFIG);
+  const leaders = buildLeaders(room.participants);
+  const mc = runMonteCarlo(leaders, DEFAULT_KPI_CONFIG, { iterations: mcIterations, seed: mcSeed });
+  const result = mc.allocation;
   const assignedByGroup = new Map<GroupCode, Set<string>>();
   for (const assignment of result.allocations) {
     const group = assignedByGroup.get(assignment.group) ?? new Set<string>();
@@ -106,6 +179,7 @@ function applyEngineResult(room: Room) {
 
   refreshGroups(room);
   room.allocationWarnings = result.warnings;
+  room.mcSummary = summarizeMc(mc);
   room.status = "POST_RUN";
 }
 
@@ -137,21 +211,11 @@ function allocate(room: Room, onlyNew = false) {
     (participant) => participant.status === "NEW_UNASSIGNED",
   );
 
-  const mergedLeaders = [...previouslyAssigned, ...newArrivals].map((participant) => ({
-    id: participant.id,
-    name: participant.name,
-    gender: participant.gender,
-    rankPreferences: [
-      participant.preference,
-      participant.rank2Preference,
-      participant.rank3Preference,
-    ] as [Preference, Preference, Preference],
-    skills: expertiseToSkillVector(participant.expertise),
-  }));
+  const mergedLeaders = buildLeaders([...previouslyAssigned, ...newArrivals]);
 
-  const result = engineAllocate(mergedLeaders, DEFAULT_KPI_CONFIG);
+  const mc = runMonteCarlo(mergedLeaders, DEFAULT_KPI_CONFIG, { iterations: mcIterations, seed: mcSeed });
   const assignedByGroup = new Map<GroupCode, Set<string>>();
-  for (const assignment of result.allocations) {
+  for (const assignment of mc.allocation.allocations) {
     const group = assignedByGroup.get(assignment.group) ?? new Set<string>();
     group.add(assignment.leaderId);
     assignedByGroup.set(assignment.group, group);
@@ -168,6 +232,7 @@ function allocate(room: Room, onlyNew = false) {
 
   refreshGroups(room);
   room.allocationWarnings = collectAllocationWarnings(room, true);
+  room.mcSummary = summarizeMc(mc);
   room.status = "POST_RUN";
 }
 
@@ -183,6 +248,7 @@ router.post("/rooms", (req, res) => {
     participants: [],
     groups: emptyGroups(),
     allocationWarnings: [],
+    mcSummary: null,
   };
   rooms.set(room.roomCode, room);
   res.status(201).json(room);
@@ -237,6 +303,7 @@ router.post("/rooms/:roomCode/grouping/clear", (req, res) => {
   });
   refreshGroups(room);
   room.allocationWarnings = [];
+  room.mcSummary = null;
   return res.json(room);
 });
 

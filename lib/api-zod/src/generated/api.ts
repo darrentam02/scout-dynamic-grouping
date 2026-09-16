@@ -7,6 +7,24 @@
  */
 import * as zod from 'zod';
 
+export const MCAllocationSummary = zod.object({
+  "iterations": zod.number(),
+  "seed": zod.number(),
+  "best": zod.object({
+    "kpi": zod.record(zod.string(), zod.number()),
+    "rankCounts": zod.tuple([zod.number(), zod.number(), zod.number()]),
+    "forcedCount": zod.number()
+  }),
+  "distribution": zod.object({
+    "rank1HitRate": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),
+    "rank2HitRate": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),
+    "genderParityScore": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),
+    "coverageScore": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),
+    "contributionScore": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() }),
+    "weightedTotal": zod.object({ "mean": zod.number(), "p10": zod.number(), "p50": zod.number(), "p90": zod.number() })
+  })
+})
+
 
 /**
  * Returns server health status
@@ -56,7 +74,8 @@ export const CreateRoomResponse = zod.object({
   "maleCount": zod.number(),
   "femaleCount": zod.number()
 })),
-  "allocationWarnings": zod.array(zod.string())
+  "allocationWarnings": zod.array(zod.string()),
+  "mcSummary": MCAllocationSummary.nullable().optional()
 })
 
 
@@ -99,7 +118,8 @@ export const GetRoomResponse = zod.object({
   "maleCount": zod.number(),
   "femaleCount": zod.number()
 })),
-  "allocationWarnings": zod.array(zod.string())
+  "allocationWarnings": zod.array(zod.string()),
+  "mcSummary": MCAllocationSummary.nullable().optional()
 })
 
 
@@ -187,7 +207,8 @@ export const RunGroupingResponse = zod.object({
   "maleCount": zod.number(),
   "femaleCount": zod.number()
 })),
-  "allocationWarnings": zod.array(zod.string())
+  "allocationWarnings": zod.array(zod.string()),
+  "mcSummary": MCAllocationSummary.nullable().optional()
 })
 
 
@@ -230,7 +251,8 @@ export const AllocateNewParticipantsResponse = zod.object({
   "maleCount": zod.number(),
   "femaleCount": zod.number()
 })),
-  "allocationWarnings": zod.array(zod.string())
+  "allocationWarnings": zod.array(zod.string()),
+  "mcSummary": MCAllocationSummary.nullable().optional()
 })
 
 
@@ -273,7 +295,8 @@ export const ClearGroupingResponse = zod.object({
   "maleCount": zod.number(),
   "femaleCount": zod.number()
 })),
-  "allocationWarnings": zod.array(zod.string())
+  "allocationWarnings": zod.array(zod.string()),
+  "mcSummary": MCAllocationSummary.nullable().optional()
 })
 
 

@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Group } from './group';
+import type { MCAllocationSummary } from './mcAllocationSummary';
 import type { Participant } from './participant';
 import type { RoomStatus } from './roomStatus';
 
@@ -17,4 +18,5 @@ export interface Room {
   participants: Participant[];
   groups: Group[];
   allocationWarnings: string[];
+  mcSummary?: MCAllocationSummary | null;
 }

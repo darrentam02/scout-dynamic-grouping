@@ -120,5 +120,35 @@ export interface Room {
   participants: Participant[];
   groups: Group[];
   allocationWarnings: string[];
+  mcSummary?: MCAllocationSummary | null;
+}
+
+export interface MCAllocationSummary {
+  iterations: number;
+  seed: number;
+  best: {
+    kpi: KpiResult;
+    rankCounts: [number, number, number];
+    forcedCount: number;
+  };
+  distribution: {
+    rank1HitRate: McStats;
+    rank2HitRate: McStats;
+    genderParityScore: McStats;
+    coverageScore: McStats;
+    contributionScore: McStats;
+    weightedTotal: McStats;
+  };
+}
+
+export interface McStats {
+  mean: number;
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+export interface KpiResult {
+  [key: string]: number;
 }
 
