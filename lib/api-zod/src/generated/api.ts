@@ -42,6 +42,8 @@ export const CreateRoomResponse = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(createRoomResponseParticipantsItemOneExpertiseMin).max(createRoomResponseParticipantsItemOneExpertiseMax)
 }).and(zod.object({
   "id": zod.string(),
@@ -83,6 +85,8 @@ export const GetRoomResponse = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(getRoomResponseParticipantsItemOneExpertiseMin).max(getRoomResponseParticipantsItemOneExpertiseMax)
 }).and(zod.object({
   "id": zod.string(),
@@ -119,6 +123,8 @@ export const AddParticipantBody = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(addParticipantBodyExpertiseMin).max(addParticipantBodyExpertiseMax)
 })
 
@@ -132,6 +138,8 @@ export const AddParticipantResponse = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(addParticipantResponseOneExpertiseMin).max(addParticipantResponseOneExpertiseMax)
 }).and(zod.object({
   "id": zod.string(),
@@ -165,6 +173,8 @@ export const RunGroupingResponse = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(runGroupingResponseParticipantsItemOneExpertiseMin).max(runGroupingResponseParticipantsItemOneExpertiseMax)
 }).and(zod.object({
   "id": zod.string(),
@@ -206,6 +216,8 @@ export const AllocateNewParticipantsResponse = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(allocateNewParticipantsResponseParticipantsItemOneExpertiseMin).max(allocateNewParticipantsResponseParticipantsItemOneExpertiseMax)
 }).and(zod.object({
   "id": zod.string(),
@@ -247,6 +259,8 @@ export const ClearGroupingResponse = zod.object({
   "name": zod.string().min(1),
   "gender": zod.enum(['Male', 'Female']),
   "preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank2Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
+  "rank3Preference": zod.enum(['P1P2', 'P3P4', 'P5P6', 'NONE']),
   "expertise": zod.array(zod.union([zod.literal(0),zod.literal(1)])).min(clearGroupingResponseParticipantsItemOneExpertiseMin).max(clearGroupingResponseParticipantsItemOneExpertiseMax)
 }).and(zod.object({
   "id": zod.string(),

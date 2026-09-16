@@ -177,6 +177,12 @@ components:
         preference:
           type: string
           enum: [P1P2, P3P4, P5P6, NONE]
+        rank2Preference:
+          type: string
+          enum: [P1P2, P3P4, P5P6, NONE]
+        rank3Preference:
+          type: string
+          enum: [P1P2, P3P4, P5P6, NONE]
         expertise:
           type: array
           minItems: 20

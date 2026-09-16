@@ -14,6 +14,8 @@ export interface ParticipantInput {
   name: string;
   gender: ParticipantInputGender;
   preference: ParticipantInputPreference;
+  rank2Preference: ParticipantInputPreference;
+  rank3Preference: ParticipantInputPreference;
   /**
      * @minItems 20
      * @maxItems 20

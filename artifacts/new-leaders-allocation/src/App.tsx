@@ -43,6 +43,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import { createParticipantTemplate, parseParticipantWorkbook } from "@/lib/xlsx-lite";
 import { SCOUT_EXPERTISE_OPTIONS, SCOUT_EXPERTISE_TIERS } from "@/lib/constants";
+import {
+  type LeaderInput,
+  runMonteCarlo,
+  DEFAULT_KPI_CONFIG,
+  DEFAULT_MC_CONFIG,
+  expertiseToSkillVector,
+} from "@workspace/allocation";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -55,12 +62,25 @@ const GROUP_COLORS = ["#d89b36", "#c76d4b", "#3b887a", "#557b91", "#9b8b53", "#7
 type GroupCode = (typeof GROUP_CODES)[number];
 type RosterFilter = "all" | "unassigned" | "new";
 
+function normalizeParticipant(participant: Participant): Participant {
+  return {
+    ...participant,
+    preference: participant.preference ?? "NONE",
+    rank2Preference: participant.rank2Preference ?? "NONE",
+    rank3Preference: participant.rank3Preference ?? "NONE",
+  };
+}
+
 function storageRoom(code: string) {
   try {
     const value = window.localStorage.getItem(ROOM_KEY + code);
     if (!value) return undefined;
     const room = JSON.parse(value) as Room & { allocationWarnings?: string[] };
-    return { ...room, allocationWarnings: room.allocationWarnings ?? [] };
+    return {
+      ...room,
+      participants: (room.participants ?? []).map(normalizeParticipant),
+      allocationWarnings: room.allocationWarnings ?? [],
+    };
   } catch {
     return undefined;
   }
@@ -131,76 +151,46 @@ function makeLocalParticipant(input: ParticipantInput): Participant {
   };
 }
 
-function expertiseSimilarity(left: number[], right: number[]) {
-  let dot = 0;
-  let leftNorm = 0;
-  let rightNorm = 0;
-  for (let index = 0; index < 20; index += 1) {
-    dot += (left[index] ?? 0) * (right[index] ?? 0);
-    leftNorm += (left[index] ?? 0) ** 2;
-    rightNorm += (right[index] ?? 0) ** 2;
-  }
-  return leftNorm && rightNorm ? dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm)) : 0;
+function toLeaderInput(participant: Participant): LeaderInput {
+  return {
+    id: participant.id,
+    name: participant.name,
+    gender: participant.gender,
+    rankPreferences: [participant.preference, participant.rank2Preference, participant.rank3Preference],
+    skills: expertiseToSkillVector(participant.expertise),
+  };
 }
 
 function runLocalGrouping(room: Room, onlyNew = false): Room {
-  const locked = onlyNew ? room.participants.filter((participant) => participant.status === "ASSIGNED") : [];
-  const pool = onlyNew ? room.participants.filter((participant) => participant.status === "NEW_UNASSIGNED") : room.participants;
-  const capacity = new Map(GROUP_CODES.map((code, index) => [code, Math.floor(room.participants.length / 6) + (index < room.participants.length % 6 ? 1 : 0)]));
-  const groups = GROUP_CODES.map((code) => {
-    const members = locked.filter((participant) => participant.assignedGroup === code);
-    return { code, participantIds: members.map((participant) => participant.id), maleCount: members.filter((participant) => participant.gender === "Male").length, femaleCount: members.filter((participant) => participant.gender === "Female").length };
-  });
-  const assignments = new Map<string, GroupCode>(locked.flatMap((participant) => participant.assignedGroup ? [[participant.id, participant.assignedGroup] as const] : []));
-  const membersFor = (group: Group) => room.participants.filter((participant) => group.participantIds.includes(participant.id));
-  const similarFemaleCount = (participant: Participant, group: Group) => membersFor(group)
-    .filter((member) => member.gender === "Female")
-    .filter((member) => expertiseSimilarity(participant.expertise, member.expertise) >= 0.75)
-    .length;
-  const preferencePenalty = (participant: Participant, code: GroupCode) => {
-    const preferred = participant.preference === "P1P2" ? ["P1", "P2"] : participant.preference === "P3P4" ? ["P3", "P4"] : participant.preference === "P5P6" ? ["P5", "P6"] : [];
-    return preferred.length && !preferred.includes(code) ? 1 : 0;
-  };
-  const chooseGroup = (participant: Participant) => {
-    const candidates = groups.filter((group) => group.participantIds.length < (capacity.get(group.code) ?? 0));
-    const conflictFree = participant.gender === "Female" ? candidates.filter((group) => similarFemaleCount(participant, group) === 0) : candidates;
-    return [...(conflictFree.length ? conflictFree : candidates)].sort((left, right) =>
-      similarFemaleCount(participant, left) - similarFemaleCount(participant, right)
-      || left.femaleCount - right.femaleCount
-      || left.participantIds.length - right.participantIds.length
-      || preferencePenalty(participant, left.code) - preferencePenalty(participant, right.code)
-      || left.code.localeCompare(right.code),
-    )[0];
-  };
-  const females = pool.filter((participant) => participant.gender === "Female").sort((left, right) => {
-    const leftDegree = pool.filter((other) => other.id !== left.id && other.gender === "Female" && expertiseSimilarity(left.expertise, other.expertise) >= 0.75).length;
-    const rightDegree = pool.filter((other) => other.id !== right.id && other.gender === "Female" && expertiseSimilarity(right.expertise, other.expertise) >= 0.75).length;
-    return rightDegree - leftDegree || left.name.localeCompare(right.name);
-  });
-  const place = (participant: Participant) => {
-    const target = chooseGroup(participant);
-    if (!target) return;
-    assignments.set(participant.id, target.code);
-    target.participantIds.push(participant.id);
-    if (participant.gender === "Female") target.femaleCount += 1;
-    else target.maleCount += 1;
-  };
-  females.forEach(place);
-  pool.filter((participant) => !assignments.has(participant.id)).sort((left, right) => left.name.localeCompare(right.name)).forEach(place);
+  const roster = onlyNew
+    ? room.participants.filter((participant) => participant.status === "ASSIGNED" || participant.status === "NEW_UNASSIGNED")
+    : room.participants;
+  const leaders = roster.map(toLeaderInput);
+  const mcResult = runMonteCarlo(leaders, DEFAULT_KPI_CONFIG, { iterations: 500, seed: DEFAULT_MC_CONFIG.seed });
+  const assignments = new Map<string, GroupCode>(mcResult.allocation.allocations.map((a) => [a.leaderId, a.group]));
 
   const participants = room.participants.map((participant) => {
-    const assignedGroup = assignments.get(participant.id) ?? (onlyNew ? participant.assignedGroup : null);
+    const isNewArrival = onlyNew && participant.status === "NEW_UNASSIGNED";
+    const assignment = assignments.get(participant.id);
+    const keepLocked = onlyNew && participant.status === "ASSIGNED";
+    const assignedGroup = isNewArrival ? assignment ?? null : keepLocked ? participant.assignedGroup : assignment ?? null;
     return assignedGroup ? { ...participant, assignedGroup, status: "ASSIGNED" as const } : { ...participant, assignedGroup: null };
   });
-  const warnings: string[] = [];
+
+  const groups = GROUP_CODES.map((code) => {
+    const memberIds = participants.filter((participant) => participant.assignedGroup === code).map((participant) => participant.id);
+    return {
+      code,
+      participantIds: memberIds,
+      maleCount: participants.filter((participant) => participant.assignedGroup === code && participant.gender === "Male").length,
+      femaleCount: participants.filter((participant) => participant.assignedGroup === code && participant.gender === "Female").length,
+    };
+  });
+
+  const warnings: string[] = [...mcResult.allocation.warnings];
   const unassigned = participants.filter((participant) => !participant.assignedGroup);
   if (unassigned.length) warnings.push(`${unassigned.length} participant${unassigned.length === 1 ? "" : "s"} could not be placed because no group capacity remained.`);
-  groups.forEach((group) => {
-    const femalesInGroup = membersFor(group).filter((participant) => participant.gender === "Female");
-    if (femalesInGroup.some((participant, index) => femalesInGroup.slice(index + 1).some((other) => expertiseSimilarity(participant.expertise, other.expertise) >= 0.75))) {
-      warnings.push(`${group.code} contains similar female expertise profiles because no other capacity was available.`);
-    }
-  });
+
   return { ...room, status: "POST_RUN", participants, groups, allocationWarnings: warnings };
 }
 
@@ -451,6 +441,8 @@ function ParticipantForm({ roomCode, onAdded }: { roomCode: string; onAdded: (pa
   const [name, setName] = useState("");
   const [gender, setGender] = useState<"Male" | "Female">("Female");
   const [preference, setPreference] = useState<ParticipantInput["preference"]>("NONE");
+  const [rank2Preference, setRank2Preference] = useState<ParticipantInput["preference"]>("NONE");
+  const [rank3Preference, setRank3Preference] = useState<ParticipantInput["preference"]>("NONE");
   const [expertise, setExpertise] = useState<number[]>(Array(20).fill(0));
   const [message, setMessage] = useState("");
   const toggleExpertise = (index: number) => setExpertise((current) => current.map((value, item) => item === index ? (value ? 0 : 1) : value));
@@ -458,7 +450,7 @@ function ParticipantForm({ roomCode, onAdded }: { roomCode: string; onAdded: (pa
     const cleanName = name.trim();
     if (!cleanName) { setMessage("A name is needed before joining."); return; }
     setMessage("");
-    const input: ParticipantInput = { name: cleanName, gender, preference, expertise: expertise as ParticipantInput["expertise"] };
+    const input: ParticipantInput = { name: cleanName, gender, preference, rank2Preference, rank3Preference, expertise: expertise as ParticipantInput["expertise"] };
     addParticipant.mutate({ roomCode, data: input }, {
       onSuccess: (participant) => { onAdded(participant); setName(""); setExpertise(Array(20).fill(0)); setMessage("Added to the live roster."); },
       onError: () => { onAdded(makeLocalParticipant(input)); setName(""); setExpertise(Array(20).fill(0)); setMessage("Saved locally — connection will catch up when available."); },
@@ -471,8 +463,13 @@ function ParticipantForm({ roomCode, onAdded }: { roomCode: string; onAdded: (pa
       <input id="participant-name" value={name} onChange={(event) => setName(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" placeholder="Participant name" data-testid="input-participant-name" />
       <div className="mt-4 grid grid-cols-2 gap-3">
         <label className="text-xs font-bold text-muted-foreground">Gender<select value={gender} onChange={(event) => setGender(event.target.value as "Male" | "Female")} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-gender"><option value="Female">Female</option><option value="Male">Male</option></select></label>
-        <label className="text-xs font-bold text-muted-foreground">Preference<select value={preference} onChange={(event) => setPreference(event.target.value as ParticipantInput["preference"])} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-preference"><option value="NONE">No preference</option><option value="P1P2">P1 or P2</option><option value="P3P4">P3 or P4</option><option value="P5P6">P5 or P6</option></select></label>
+        <label className="text-xs font-bold text-muted-foreground">1st choice<select value={preference} onChange={(event) => setPreference(event.target.value as ParticipantInput["preference"])} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-preference"><option value="NONE">No preference</option><option value="P1P2">P1 or P2</option><option value="P3P4">P3 or P4</option><option value="P5P6">P5 or P6</option></select></label>
       </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <label className="text-xs font-bold text-muted-foreground">2nd choice<select value={rank2Preference} onChange={(event) => setRank2Preference(event.target.value as ParticipantInput["preference"])} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-rank2"><option value="NONE">No preference</option><option value="P1P2">P1 or P2</option><option value="P3P4">P3 or P4</option><option value="P5P6">P5 or P6</option></select></label>
+        <label className="text-xs font-bold text-muted-foreground">3rd choice<select value={rank3Preference} onChange={(event) => setRank3Preference(event.target.value as ParticipantInput["preference"])} className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm font-medium outline-none focus:border-primary" data-testid="select-participant-rank3"><option value="NONE">No preference</option><option value="P1P2">P1 or P2</option><option value="P3P4">P3 or P4</option><option value="P5P6">P5 or P6</option></select></label>
+      </div>
+      {preference !== "NONE" && (preference === rank2Preference || preference === rank3Preference || (rank2Preference !== "NONE" && rank2Preference === rank3Preference)) && <p className="mt-2 text-[11px] font-semibold text-destructive" data-testid="status-preference-duplicate">Choices should not repeat. Each tier appears at most once.</p>}
        <div className="mt-5"><div className="flex items-baseline justify-between"><label className="text-xs font-bold text-muted-foreground">Scout expertise</label><span className="font-mono-ui text-[10px] text-muted-foreground">{expertise.reduce((sum, item) => sum + item, 0)} / 20 selected</span></div><div className="mt-2 space-y-1.5 rounded-lg border border-border bg-background p-2.5">{SCOUT_EXPERTISE_TIERS.map((tier) => <div key={tier.label}><div className="px-1 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.14em] text-muted-foreground">{tier.label}</div><div className="grid gap-1 md:grid-cols-2">{SCOUT_EXPERTISE_OPTIONS.slice(tier.start, tier.end + 1).map((option, offset) => { const index = tier.start + offset; return <label key={option} className={`flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-[11px] leading-4 transition-colors ${expertise[index] ? "bg-primary/10 text-primary" : "hover:bg-secondary"}`}><input type="checkbox" checked={Boolean(expertise[index])} onChange={() => toggleExpertise(index)} className="mt-0.5 h-3.5 w-3.5 accent-primary" data-testid={`checkbox-expertise-${index}`} /><span>{option}</span></label>; })}</div></div>)}</div></div>
       <button onClick={submit} disabled={addParticipant.isPending} className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-bold text-primary-foreground transition-transform hover:-translate-y-0.5 disabled:opacity-70" data-testid="button-add-participant"><Plus size={16} />{addParticipant.isPending ? "Adding…" : "Add to roster"}</button>
       {message && <p className="mt-3 text-xs font-semibold text-primary" data-testid="status-participant-form">{message}</p>}
@@ -559,6 +556,65 @@ function GroupCard({ group, participants, index }: { group: Group; participants:
   </article>;
 }
 
+function AllocationSummary({ room }: { room: Room }) {
+  const summary = useMemo(() => {
+    if (room.status !== "POST_RUN") return null;
+    const assigned = room.participants.filter((p) => p.assignedGroup);
+    if (!assigned.length) return null;
+
+    const CLUSTER_MAP: Record<GroupCode, "P1P2" | "P3P4" | "P5P6"> = {
+      P1: "P1P2", P2: "P1P2", P3: "P3P4", P4: "P3P4", P5: "P5P6", P6: "P5P6",
+    };
+
+    let rank1 = 0, rank2 = 0, rank3 = 0, forced = 0;
+    for (const p of assigned) {
+      const cluster = CLUSTER_MAP[p.assignedGroup!];
+      if (p.preference === cluster) rank1++;
+      else if (p.rank2Preference === cluster) rank2++;
+      else if (p.rank3Preference === cluster) rank3++;
+      else forced++;
+    }
+
+    const byGroup = room.groups.map((g) => ({ male: g.maleCount, female: g.femaleCount }));
+    const totalM = byGroup.reduce((s, g) => s + g.male, 0);
+    const totalF = byGroup.reduce((s, g) => s + g.female, 0);
+    const parity = totalM && totalF
+      ? Math.round(byGroup.reduce((s, g) => {
+          const total = g.male + g.female;
+          const ideal = totalF / (totalM + totalF) * total;
+          return s + (total ? Math.max(0, 1 - Math.abs(g.female - ideal) / total) : 1);
+        }, 0) / byGroup.length * 100)
+      : 0;
+
+    const coveredSkills = new Set<number>();
+    for (const p of assigned) {
+      const input = toLeaderInput(p);
+      for (let i = 0; i < input.skills.length; i++) {
+        if (input.skills[i]) coveredSkills.add(i);
+      }
+    }
+    const coverage = Math.round(coveredSkills.size / 18 * 100);
+
+    const r1 = rank1 / assigned.length;
+    const r2 = rank2 / assigned.length;
+    const r3 = rank3 / assigned.length;
+    const kpiTotal = (r1 * 0.4 + r2 * 0.2 + parity / 100 * 0.2 + coverage / 100 * 0.1 + 0.8 * 0.1);
+
+    return {
+      rank1: Math.round(r1 * 100),
+      rank2: Math.round(r2 * 100),
+      rank3: Math.round(r3 * 100),
+      forced,
+      genderParity: parity,
+      coverage,
+      total: kpiTotal.toFixed(3),
+    };
+  }, [room]);
+
+  if (!summary) return null;
+  return <section data-testid="panel-allocation-summary"><div className="mb-4"><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Soft-coded KPI</p><h2 className="mt-2 text-xl font-bold tracking-[-.05em] text-primary">Allocation summary</h2></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><div className="card-surface rounded-xl border border-border p-4"><p className="text-xs font-bold text-muted-foreground">1st choice hit rate</p><p className="mt-1 font-mono-ui text-3xl font-medium text-primary">{summary.rank1}%</p></div><div className="card-surface rounded-xl border border-border p-4"><p className="text-xs font-bold text-muted-foreground">2nd choice hit rate</p><p className="mt-1 font-mono-ui text-3xl font-medium text-primary">{summary.rank2}%</p></div><div className="card-surface rounded-xl border border-border p-4"><p className="text-xs font-bold text-muted-foreground">3rd choice / Forced</p><p className="mt-1 font-mono-ui text-3xl font-medium text-primary">{summary.rank3}% <span className="text-sm text-muted-foreground">({summary.forced} forced)</span></p></div><div className="card-surface rounded-xl border border-border p-4"><p className="text-xs font-bold text-muted-foreground">Gender parity</p><p className="mt-1 font-mono-ui text-3xl font-medium text-primary">{summary.genderParity}%</p></div><div className="card-surface rounded-xl border border-border p-4"><p className="text-xs font-bold text-muted-foreground">Skill coverage</p><p className="mt-1 font-mono-ui text-3xl font-medium text-primary">{summary.coverage}%</p></div><div className="rounded-xl border border-primary/25 bg-primary/5 p-4"><p className="text-xs font-bold text-muted-foreground">Weighted KPI score</p><p className="mt-1 font-mono-ui text-3xl font-medium text-primary">{summary.total}</p></div></div></section>;
+}
+
 function Roster({ participants, filter, setFilter }: { participants: Participant[]; filter: RosterFilter; setFilter: (filter: RosterFilter) => void }) {
   const [search, setSearch] = useState("");
   const filtered = participants.filter((participant) => {
@@ -567,7 +623,7 @@ function Roster({ participants, filter, setFilter }: { participants: Participant
   });
   return <section className="card-surface rounded-2xl border border-border" data-testid="panel-live-roster">
     <div className="flex flex-col gap-4 border-b border-border p-5 md:flex-row md:items-center md:justify-between md:p-6"><div><div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#5c9d72]" /><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Live roster</p></div><h2 className="mt-2 text-xl font-bold tracking-[-.04em]">People in the room <span className="font-mono-ui text-sm font-medium text-muted-foreground">/ {participants.length}</span></h2></div><div className="flex gap-2"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a person" className="h-10 w-full rounded-lg border border-input bg-background px-3 text-xs outline-none focus:border-primary md:w-40" data-testid="input-roster-search" /><div className="flex rounded-lg border border-border bg-secondary p-1">{(["all", "unassigned", "new"] as RosterFilter[]).map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-2.5 py-1.5 text-[10px] font-bold capitalize ${filter === item ? "bg-card text-primary shadow-sm" : "text-muted-foreground"}`} data-testid={`button-roster-filter-${item}`}>{item}</button>)}</div></div></div>
-    <div className="divide-y divide-border">{filtered.length ? filtered.map((participant) => <div key={participant.id} className={`flex items-center gap-3 px-5 py-3.5 md:px-6 ${participant.status === "NEW_UNASSIGNED" ? "bg-accent/10" : ""}`} data-testid={`row-participant-${participant.id}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-extrabold text-primary">{initials(participant.name)}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-sm font-bold">{participant.name}</span>{participant.status === "NEW_UNASSIGNED" && <span className="rounded bg-accent/25 px-1.5 py-0.5 font-mono-ui text-[9px] font-medium uppercase tracking-wider text-accent-foreground">new</span>}</div><div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground"><span>{participant.gender}</span><span className="text-border">•</span><span>{participant.preference === "NONE" ? "No preference" : participant.preference === "P1P2" ? "P1 / P2" : participant.preference === "P3P4" ? "P3 / P4" : "P5 / P6"}</span></div></div><div className="hidden items-center gap-1 md:flex" title={`${participant.expertise.reduce((sum, value) => sum + value, 0)} expertise signals`}>{participant.expertise.slice(0, 10).map((value, index) => <span key={index} className={`h-1.5 w-1.5 rounded-full ${value ? "bg-primary" : "bg-border"}`} />)}</div><span className={`shrink-0 rounded-full px-2.5 py-1 font-mono-ui text-[10px] font-medium ${participant.assignedGroup ? "bg-secondary text-primary" : "border border-dashed border-input text-muted-foreground"}`} data-testid={`status-assignment-${participant.id}`}>{participant.assignedGroup ?? "unassigned"}</span></div>) : <div className="flex flex-col items-center justify-center px-6 py-16 text-center"><div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground"><Users size={20} /></div><p className="mt-4 text-sm font-bold">No one in this view yet</p><p className="mt-1 text-xs text-muted-foreground">New arrivals will appear here as they enter.</p></div>}</div>
+    <div className="divide-y divide-border">{filtered.length ? filtered.map((participant) => <div key={participant.id} className={`flex items-center gap-3 px-5 py-3.5 md:px-6 ${participant.status === "NEW_UNASSIGNED" ? "bg-accent/10" : ""}`} data-testid={`row-participant-${participant.id}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-extrabold text-primary">{initials(participant.name)}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-sm font-bold">{participant.name}</span>{participant.status === "NEW_UNASSIGNED" && <span className="rounded bg-accent/25 px-1.5 py-0.5 font-mono-ui text-[9px] font-medium uppercase tracking-wider text-accent-foreground">new</span>}</div><div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground"><span>{participant.gender}</span><span className="text-border">•</span><span>{[participant.preference, participant.rank2Preference, participant.rank3Preference].filter((value) => value !== "NONE").map((value) => value === "P1P2" ? "P1/P2" : value === "P3P4" ? "P3/P4" : "P5/P6").join(" → ") || "No preference"}</span></div></div><div className="hidden items-center gap-1 md:flex" title={`${participant.expertise.reduce((sum, value) => sum + value, 0)} expertise signals`}>{participant.expertise.slice(0, 10).map((value, index) => <span key={index} className={`h-1.5 w-1.5 rounded-full ${value ? "bg-primary" : "bg-border"}`} />)}</div><span className={`shrink-0 rounded-full px-2.5 py-1 font-mono-ui text-[10px] font-medium ${participant.assignedGroup ? "bg-secondary text-primary" : "border border-dashed border-input text-muted-foreground"}`} data-testid={`status-assignment-${participant.id}`}>{participant.assignedGroup ?? "unassigned"}</span></div>) : <div className="flex flex-col items-center justify-center px-6 py-16 text-center"><div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground"><Users size={20} /></div><p className="mt-4 text-sm font-bold">No one in this view yet</p><p className="mt-1 text-xs text-muted-foreground">New arrivals will appear here as they enter.</p></div>}</div>
   </section>;
 }
 
@@ -609,7 +665,7 @@ function RoomPage() {
   const allocateNew = useAllocateNewParticipants();
   const clearGrouping = useClearGrouping();
 
-  useEffect(() => { if (roomQuery.data) { setLocalRoom(roomQuery.data); saveRoom(roomQuery.data); } }, [roomQuery.data]);
+  useEffect(() => { if (roomQuery.data) { const normalized = { ...roomQuery.data, participants: roomQuery.data.participants.map(normalizeParticipant) }; setLocalRoom(normalized); saveRoom(normalized); } }, [roomQuery.data]);
   useEffect(() => {
     if (toast) {
       const timer = window.setTimeout(() => setToast(""), 2800);
@@ -664,6 +720,7 @@ function RoomPage() {
       <div className="mt-7 grid gap-7 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-7">
           <section><div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-muted-foreground">Six fixed destinations</p><h2 className="mt-2 text-2xl font-bold tracking-[-.05em] text-primary">The group board</h2></div><p className="max-w-[300px] text-right text-xs leading-5 text-muted-foreground">Balance stays visible: headcount, gender mix, and the people inside each call.</p></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{groups.map((group, index) => <GroupCard key={group.code} group={group} participants={room.participants} index={index} />)}</div></section>
+          {room.status === "POST_RUN" && <AllocationSummary room={room} />}
           <Roster participants={room.participants} filter={filter} setFilter={setFilter} />
         </div>
         <aside className="space-y-5">

@@ -64,8 +64,8 @@ function worksheetXml(rows: string[][]) {
 }
 
 export function createParticipantTemplate() {
-  const headers = ["name", "gender", "preference", ...Array.from({ length: 20 }, (_, index) => `expertise_${String(index + 1).padStart(2, "0")}`)];
-  const sample = ["陳美儀", "Female", "P5P6", "1", "0", "0", "0", "0", "0", "1", "0", "0", "0", "0", "0", "0", "1", "0", "0", "0", "0", "0", "0"];
+  const headers = ["name", "gender", "preference", "rank2Preference", "rank3Preference", ...Array.from({ length: 20 }, (_, index) => `expertise_${String(index + 1).padStart(2, "0")}`)];
+  const sample = ["陳美儀", "Female", "P5P6", "P3P4", "NONE", "1", "0", "0", "0", "0", "0", "1", "0", "0", "0", "0", "0", "0", "1", "0", "0", "0", "0", "0", "0"];
   const entries: ZipEntry[] = [
     { name: "[Content_Types].xml", data: encoder.encode(`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`) },
     { name: "_rels/.rels", data: encoder.encode(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
@@ -138,10 +138,14 @@ function normalizedHeader(value: string) {
   return value.replace(/^\uFEFF/, "").trim().toLowerCase();
 }
 
-function findHeaderIndex(headers: string[], field: "name" | "gender" | "preference") {
+function findHeaderIndex(headers: string[], field: "name" | "gender" | "preference" | "rank2Preference" | "rank3Preference") {
   const label = field === "name" ? "(?:leader\\s+)?name" : field;
   const pattern = new RegExp(`^(?:${label}|[a-z]+\\s*\\(${field}\\))$`, "i");
   return headers.findIndex((header) => pattern.test(normalizedHeader(header)));
+}
+
+function preferenceLabels() {
+  return ["preference", "rank2Preference", "rank3Preference"] as const;
 }
 
 function expertiseIndexFromHeader(header: string) {
@@ -194,19 +198,22 @@ export async function parseParticipantWorkbook(file: File) {
     const headers = headerRow.values.map((value) => value ?? "");
     const nameIndex = findHeaderIndex(headers, "name");
     const genderIndex = findHeaderIndex(headers, "gender");
-    const preferenceIndex = findHeaderIndex(headers, "preference");
+    const rankColumns = preferenceLabels().map((field) => findHeaderIndex(headers, field));
     const expertiseIndexes = Array.from({ length: 20 }, () => -1);
     headers.forEach((header, index) => {
       const expertiseIndex = expertiseIndexFromHeader(header);
       if (expertiseIndex >= 0 && expertiseIndex < 20) expertiseIndexes[expertiseIndex] = index;
     });
 
-    // If a workbook uses unlabelled expertise columns, keep compatibility with
-    // the template's fixed layout: the 20 columns immediately after preference.
-    if (expertiseIndexes.some((index) => index < 0) && preferenceIndex >= 0) {
-      expertiseIndexes.forEach((index, expertiseIndex) => {
-        if (index < 0) expertiseIndexes[expertiseIndex] = preferenceIndex + 1 + expertiseIndex;
-      });
+    // If the book uses unlabelled expertise columns, fall back to the fixed
+    // template layout: the 20 columns immediately after the preference block.
+    if (expertiseIndexes.some((index) => index < 0)) {
+      const lastRankIndex = rankColumns[2] >= 0 ? rankColumns[2] : rankColumns[0];
+      if (lastRankIndex >= 0) {
+        expertiseIndexes.forEach((index, expertiseIndex) => {
+          if (index < 0) expertiseIndexes[expertiseIndex] = lastRankIndex + 1 + expertiseIndex;
+        });
+      }
     }
 
     return rows
@@ -216,11 +223,14 @@ export async function parseParticipantWorkbook(file: File) {
         const valueAt = (index: number) => (index >= 0 ? row[index]?.trim() ?? "" : "");
         const rawGender = valueAt(genderIndex).toLowerCase();
         const gender: "Male" | "Female" = rawGender === "male" || rawGender === "m" ? "Male" : "Female";
+        const rankPreferences = rankColumns.map((index) => normalizePreference(valueAt(index)));
         return {
           row: candidate.rowNumber,
           name: valueAt(nameIndex),
           gender,
-          preference: normalizePreference(valueAt(preferenceIndex)),
+          preference: rankPreferences[0],
+          rank2Preference: rankPreferences[1] ?? "NONE",
+          rank3Preference: rankPreferences[2] ?? "NONE",
           expertise: expertiseIndexes.map((index) => isEnabled(valueAt(index)) ? 1 : 0),
         };
       })
