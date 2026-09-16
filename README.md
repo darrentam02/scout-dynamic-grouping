@@ -10,6 +10,9 @@ A full-stack app for fairly allocating scout leaders into six patrol groups (`P1
 - **Monte Carlo 500** — runs 500 seeded simulations and keeps the assignment with the best soft-coded KPI.
 - **Excel bulk import** — download the `.xlsx` template with `Name`, `Gender`, `Preference`, `rank2Preference`, `rank3Preference`, and `E01–E20` columns, fill it in, upload it.
 - **Soft-coded KPI dashboard** — the group board shows rank-1/2/3 hit rates, gender parity, skill coverage, and a weighted KPI score after every allocation.
+- **PostgreSQL persistence** — room records, rosters, and grouping results are persisted through Drizzle, so restarting the API never clears live rooms.
+- **Protected late arrivals** — when new leaders check in after a run, incremental allocation pins the existing patrol placements and fits the new arrivals into open seats using the same scoring.
+- **End-to-end API coverage** — a test suite drives room creation → roster intake → persisted grouping so the room flow stays regression-free.
 
 ## Repository layout
 
@@ -20,10 +23,12 @@ artifacts/
   mockup-sandbox/            UI sandbox (generated components)
 lib/
   allocation/                Shared allocation engine (@workspace/allocation)
+  db/                        Drizzle schema + Postgres client (@workspace/db)
   api-spec/                  OpenAPI spec + orval config (single source of truth)
   api-zod/                   Generated zod schemas from the OpenAPI spec
   api-client-react/          Generated typed React hooks + fetch client
 scripts/                     Repo maintenance scripts
+artifacts/api-server/src/rooms.e2e.test.ts   End-to-end room → roster → grouping suite
 ```
 
 ## Allocation algorithm
@@ -36,6 +41,8 @@ The engine in `lib/allocation` implements a two-stage waterfall:
 2. **Sub-group split** — each cluster's 12 leaders are split into its two patrols of **6**, keeping gender counts as even as possible (e.g. 10 female / 26 male → four groups of 2F+4M and two groups of 1F+5M).
    - Ties are broken by non-core skill contribution so specialist skills spread across patrols.
 
+**Incremental allocation (`grouping/new`)** — previously assigned leaders are passed to the engine as `lockedGroups`, so every Monte Carlo iteration treats their patrol as fixed and only fills open seats, keeping late arrivals from reshuffling a room that has already been called.
+
 **KPI** (soft-coded in `DEFAULT_KPI_CONFIG`):
 
 ```
@@ -47,16 +54,16 @@ Monte Carlo runs server-side on every grouping call with seed `20260916` (defaul
 
 ## API
 
-All routes live under `artifacts/api-server/src/routes` and are validated with zod (generated from `lib/api-spec/openapi.yaml`).
+All routes live under `artifacts/api-server/src/routes`, are validated with zod (generated from `lib/api-spec/openapi.yaml`), and their room state is read from / written to PostgreSQL on every call.
 
 | Method | Path                           | Description                                  |
 | ------ | ------------------------------ | -------------------------------------------- |
 | GET    | `/api/healthz`                 | Health check → `{"status":"ok"}`             |
-| POST   | `/api/rooms`                   | Create a room (host name)                    |
+| POST   | `/api/rooms`                   | Create a room (host name), persisted         |
 | GET    | `/api/rooms/:roomCode`         | Fetch a room with roster + groups            |
 | POST   | `/api/rooms/:roomCode/participants`| Check a leader in (name, gender, 3 ranks, skills) |
-| POST   | `/api/rooms/:roomCode/grouping`| Run full allocation                          |
-| POST   | `/api/rooms/:roomCode/grouping/new`| Allocate only new arrivals (locks existing)|
+| POST   | `/api/rooms/:roomCode/grouping`| Run full MC500 allocation                    |
+| POST   | `/api/rooms/:roomCode/grouping/new`| Allocate only new arrivals; existing patrols are locked |
 | POST   | `/api/rooms/:roomCode/grouping/clear`| Clear all assignments                     |
 
 ## Getting started
